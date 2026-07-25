@@ -428,5 +428,55 @@ await leg('reconnect', async () => {
   return 'stream dropped, reopened, beacons flow again';
 });
 
+if (REAL) {
+  // Mailbox hygiene (same rationale as e2e-mail.mjs cleanup): hard-delete
+  // this run's fanin message from the real server, best-effort.
+  await leg('cleanup', async () => {
+    const auth = {
+      userId: 'e2e-rt-cleanup',
+      accessToken: '',
+      refreshToken: '',
+      email: mode.email,
+      imap: {
+        imapHost: devVars.IMAP_DEFAULT_IMAP_HOST,
+        imapPort: Number(devVars.IMAP_DEFAULT_IMAP_PORT || 993),
+        imapSecure: true,
+        smtpHost: devVars.IMAP_DEFAULT_SMTP_HOST,
+        smtpPort: Number(devVars.IMAP_DEFAULT_SMTP_PORT || 587),
+        smtpSecure: false,
+        username: devVars.TEST_IMAP_USER,
+        password: devVars.TEST_IMAP_PASSWORD,
+        allowInsecureTls: true,
+      },
+    };
+    const rpc = async (method, args) => {
+      const res = await fetch(`${SIDECAR}/rpc`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-imap-sidecar-secret': devVars.IMAP_SIDECAR_SECRET,
+        },
+        body: JSON.stringify({ method, args, auth }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(`${method}: ${body.error}`);
+      return body.result;
+    };
+    let deleted = 0;
+    const listing = await rpc('list', [{ folder: 'inbox', maxResults: 20 }]);
+    for (const t of listing.threads ?? []) {
+      if ((t.$raw?.subject ?? '').includes(runId)) {
+        try {
+          await rpc('delete', [t.id]);
+          deleted++;
+        } catch {
+          // best-effort
+        }
+      }
+    }
+    return `${deleted} thread(s) of run ${runId} hard-deleted from the real server`;
+  });
+}
+
 console.log(`\n[e2e-rt] mode=${mode.name} — ${failed ? 'FAILED' : 'ALL LEGS GREEN'}`);
 process.exit(failed ? 1 : 0);

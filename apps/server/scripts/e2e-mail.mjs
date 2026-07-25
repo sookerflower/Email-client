@@ -362,6 +362,62 @@ if (SKIP_IDLE) {
   });
 }
 
+if (REAL) {
+  // Mailbox hygiene: hard-delete this run's messages from the REAL server
+  // (thread delete purges every folder member via the worker /rpc driver).
+  // Without this the mailbox grows a few messages per run, full-refetch
+  // sync time grows with it, and the timing windows above start flaking
+  // (observed at ~55 inbox threads). Best-effort — a failure here does not
+  // fail the run. GreenMail needs none of this (drop-recover wipes it).
+  await leg('cleanup', async () => {
+    const auth = {
+      userId: 'e2e-cleanup',
+      accessToken: '',
+      refreshToken: '',
+      email: mode.email,
+      imap: {
+        imapHost: devVars.IMAP_DEFAULT_IMAP_HOST,
+        imapPort: Number(devVars.IMAP_DEFAULT_IMAP_PORT || 993),
+        imapSecure: true,
+        smtpHost: devVars.IMAP_DEFAULT_SMTP_HOST,
+        smtpPort: Number(devVars.IMAP_DEFAULT_SMTP_PORT || 587),
+        smtpSecure: false,
+        username: devVars.TEST_IMAP_USER,
+        password: devVars.TEST_IMAP_PASSWORD,
+        allowInsecureTls: true,
+      },
+    };
+    const rpc = async (method, args) => {
+      const res = await fetch(`${SIDECAR}/rpc`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-imap-sidecar-secret': devVars.IMAP_SIDECAR_SECRET,
+        },
+        body: JSON.stringify({ method, args, auth }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(`${method}: ${body.error}`);
+      return body.result;
+    };
+    let deleted = 0;
+    for (const folder of ['inbox', 'sent']) {
+      const listing = await rpc('list', [{ folder, maxResults: 20 }]);
+      for (const t of listing.threads ?? []) {
+        if ((t.$raw?.subject ?? '').includes(runId)) {
+          try {
+            await rpc('delete', [t.id]);
+            deleted++;
+          } catch {
+            // best-effort
+          }
+        }
+      }
+    }
+    return `${deleted} thread(s) of run ${runId} hard-deleted from the real server`;
+  });
+}
+
 if (!REAL) {
   await leg('drop-recover', async () => {
     // Kill every IMAP connection out from under the worker's driver cache.

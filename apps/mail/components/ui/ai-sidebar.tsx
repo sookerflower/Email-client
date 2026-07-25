@@ -1,22 +1,20 @@
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
 import { ArrowsPointingIn, PanelLeftOpen, Phone } from '../icons/icons';
+import { useRealtimeBeacons } from '@/hooks/use-realtime-beacons';
 import { useActiveConnection } from '@/hooks/use-connections';
 import { ResizablePanel } from '@/components/ui/resizable';
 import { useSearchValue } from '@/hooks/use-search-value';
 import { useState, useEffect, useCallback } from 'react';
-import useSearchLabels from '@/hooks/use-labels-search';
 import { useQueryClient } from '@tanstack/react-query';
 import { AIChat } from '@/components/create/ai-chat';
 import { useTRPC } from '@/providers/query-provider';
 import { Tools } from '../../../server/src/types';
-import { useDoState } from '../mail/use-do-state';
 import { PromptsDialog } from './prompts-dialog';
 import { Button } from '@/components/ui/button';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { useLabels } from '@/hooks/use-labels';
 import { useAgentChat } from 'agents/ai-react';
 import { X, Expand, Plus } from 'lucide-react';
-import { IncomingMessageType } from '../party';
 import { useParams } from 'react-router';
 import { useAgent } from 'agents/react';
 import { useQueryState } from 'nuqs';
@@ -303,49 +301,18 @@ function AISidebar({ className }: AISidebarProps) {
   const { refetch: refetchLabels } = useLabels();
   const [searchValue] = useSearchValue();
   const { data: activeConnection } = useActiveConnection();
-  const [, setDoState] = useDoState();
-  const { labels } = useSearchLabels();
 
-  const onMessage = useCallback(
-    (message: any) => {
-      try {
-        const parsedData = JSON.parse(message.data);
-        const { type } = parsedData;
-        if (type === IncomingMessageType.Mail_Get) {
-          const { threadId } = parsedData;
-          queryClient.invalidateQueries({
-            queryKey: trpc.mail.get.queryKey({ id: threadId }),
-          });
-        } else if (type === IncomingMessageType.Mail_List) {
-          const { folder } = parsedData;
-          queryClient.invalidateQueries({
-            queryKey: trpc.mail.listThreads.infiniteQueryKey({
-              folder,
-              labelIds: labels,
-              q: searchValue.value,
-            }),
-          });
-        } else if (type === IncomingMessageType.User_Topics) {
-          queryClient.invalidateQueries({
-            queryKey: trpc.labels.list.queryKey(),
-          });
-        } else if (type === IncomingMessageType.Do_State) {
-          const { isSyncing, syncingFolders, storageSize, counts, shards } = parsedData;
-          setDoState({ isSyncing, syncingFolders, storageSize, counts: counts ?? [], shards });
-        }
-      } catch (error) {
-        console.error('error parsing party message', error, { rawMessage: message.data });
-      }
-    },
-    [queryClient, trpc, labels, searchValue.value, setDoState],
-  );
+  // Phase 5 §8b: mail invalidation beacons now arrive over SSE (the old WS
+  // onMessage body lives on unchanged in this hook + lib/realtime-beacons).
+  useRealtimeBeacons(activeConnection?.id ? String(activeConnection.id) : undefined);
 
+  // Dead on Node (no ZeroAgent DO) — kept solely because useAgentChat needs
+  // an agent handle until the 5.4 useChat swap removes both together.
   const agent = useAgent({
     agent: 'ZeroAgent',
     name: activeConnection?.id ? String(activeConnection.id) : 'general',
     host: `${import.meta.env.VITE_PUBLIC_BACKEND_URL}`,
     onError: (e) => console.log(e),
-    onMessage,
   });
 
   const chatState = useAgentChat({

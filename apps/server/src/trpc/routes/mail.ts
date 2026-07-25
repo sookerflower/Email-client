@@ -511,8 +511,6 @@ export const mailRouter = router({
         }
 
         const rawDelaySeconds = Math.floor((targetTime - Date.now()) / 1000);
-        const maxQueueDelay = 43200; // 12 hours
-        const isLongTerm = rawDelaySeconds > maxQueueDelay;
 
         const mailPayload = {
           ...mail,
@@ -537,29 +535,28 @@ export const mailRouter = router({
           return { success: false, error: 'Failed to schedule email' } as const;
         }
 
-        if (!isLongTerm) {
-          // Long-term sends stay 'pending' until the hourly promotion sweep.
-          const queueBody: IEmailSendBatch = {
-            messageId,
-            connectionId: activeConnection.id,
-            sendAt: targetTime,
-          };
-          try {
-            await env.send_email_queue.send(queueBody, { delaySeconds: rawDelaySeconds });
-            await outboxStore.markQueued(messageId);
-          } catch (error) {
-            console.error(`Failed to enqueue email send for message ${messageId}`, error);
-            return { success: false, error: 'Failed to enqueue email send' } as const;
-          }
+        // BullMQ delayed jobs take any duration — the old 12-hour split
+        // (queue for short delays, hourly cron promotion for long ones) is
+        // gone. If the enqueue fails, the row stays 'pending' and the
+        // reconciliation sweep recovers it at send_at.
+        const queueBody: IEmailSendBatch = {
+          messageId,
+          connectionId: activeConnection.id,
+          sendAt: targetTime,
+        };
+        try {
+          await env.send_email_queue.send(queueBody, { delaySeconds: rawDelaySeconds });
+          await outboxStore.markQueued(messageId);
+        } catch (error) {
+          console.error(
+            `Failed to enqueue email send for message ${messageId} — reconciliation sweep will recover it`,
+            error,
+          );
         }
 
         ctx.c.executionCtx.waitUntil(afterTask());
 
-        if (isLongTerm) {
-          return { success: true, scheduled: true, messageId, sendAt: targetTime };
-        } else {
-          return { success: true, queued: true, messageId, sendAt: targetTime };
-        }
+        return { success: true, queued: true, messageId, sendAt: targetTime };
       }
 
       const mailWithAttachments = {
@@ -606,6 +603,21 @@ export const mailRouter = router({
       const cancelled = await outboxStore.cancel(messageId);
       if (!cancelled) {
         return { success: false, error: 'Email was already sent' } as const;
+      }
+
+      // Best-effort removal of the delivery-timer job; the row status above
+      // is the source of truth and the handler re-checks it at fire time.
+      try {
+        await fetch(`${env.IMAP_SIDECAR_URL || 'http://127.0.0.1:8791'}/cancel-send`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-imap-sidecar-secret': env.IMAP_SIDECAR_SECRET || '',
+          },
+          body: JSON.stringify({ messageId }),
+        });
+      } catch (error) {
+        console.warn(`[unsend] timer-job removal failed for ${messageId}:`, error);
       }
 
       return { success: true };

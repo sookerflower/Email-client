@@ -142,15 +142,17 @@ export const outboxStore = {
   },
 
   /**
-   * Optimistic completion: only marks sent if not cancelled meanwhile; the
-   * caller must check the return value BEFORE dispatching is not needed —
-   * check status first, send, then this guard catches a cancel that raced in.
+   * Optimistic completion (§4): only pending/queued rows flip to 'sent'.
+   * Returns false when 0 rows updated — a cancel raced in mid-send; the
+   * caller logs it and must NOT resend.
    */
-  async markSent(id: string): Promise<void> {
-    await db()
+  async markSent(id: string): Promise<boolean> {
+    const result = await db()
       .update(outbox)
       .set({ status: 'sent', updatedAt: new Date() })
-      .where(eq(outbox.id, id));
+      .where(and(eq(outbox.id, id), inArray(outbox.status, ['pending', 'queued'])))
+      .returning({ id: outbox.id });
+    return result.length > 0;
   },
 
   async markFailed(id: string, error: string): Promise<void> {
@@ -164,6 +166,17 @@ export const outboxStore = {
   async listDuePending(horizon: Date): Promise<OutboxRow[]> {
     return await db().query.outbox.findMany({
       where: and(eq(outbox.status, 'pending'), lte(outbox.sendAt, horizon)),
+    });
+  },
+
+  /**
+   * Reconciliation sweep input (§4): rows that should have fired by now but
+   * are still unsent — 'pending' (never got a timer) or 'queued' (timer job
+   * lost, e.g. Redis data loss; Postgres survives).
+   */
+  async listOverdueUnsent(now: Date): Promise<OutboxRow[]> {
+    return await db().query.outbox.findMany({
+      where: and(inArray(outbox.status, ['pending', 'queued']), lte(outbox.sendAt, now)),
     });
   },
 };

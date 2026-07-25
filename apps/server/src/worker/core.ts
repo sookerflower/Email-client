@@ -40,6 +40,14 @@ export interface MailWorkerOptions {
    * legacy sidecar wrapper, which has no queue runtime.
    */
   enqueueSync?: (connectionId: string, folder: string) => Promise<void>;
+  /**
+   * Phase 4 §4: outbox delivery timers. The api process cannot import
+   * BullMQ (workerd bundle), so its send_email_queue shim POSTs
+   * /enqueue-send and /cancel-send here. Absent on the legacy sidecar
+   * (routes answer 501).
+   */
+  enqueueSend?: (messageId: string, connectionId: string, sendAt: number) => Promise<void>;
+  cancelSend?: (messageId: string) => Promise<void>;
   /** Optional legacy .label-store.json to import once at boot. */
   legacyLabelStorePath?: string;
 }
@@ -368,12 +376,45 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
       });
     }
 
-    if (req.method !== 'POST' || url.pathname !== '/rpc') {
+    const isQueueRoute =
+      url.pathname === '/enqueue-send' || url.pathname === '/cancel-send';
+    if (req.method !== 'POST' || (url.pathname !== '/rpc' && !isQueueRoute)) {
       return send(res, 404, { error: 'Not found' });
     }
 
     if (req.headers['x-imap-sidecar-secret'] !== opts.secret) {
       return send(res, 401, { error: 'Unauthorized' });
+    }
+
+    if (isQueueRoute) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let body: any;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch {
+        return send(res, 400, { error: 'Invalid JSON body' });
+      }
+      try {
+        if (url.pathname === '/enqueue-send') {
+          if (!opts.enqueueSend) return send(res, 501, { error: 'send queue not available' });
+          const { messageId, connectionId, sendAt } = body ?? {};
+          if (typeof messageId !== 'string' || typeof connectionId !== 'string' || typeof sendAt !== 'number') {
+            return send(res, 400, { error: 'messageId, connectionId, sendAt required' });
+          }
+          await opts.enqueueSend(messageId, connectionId, sendAt);
+          return send(res, 200, { ok: true });
+        }
+        if (!opts.cancelSend) return send(res, 501, { error: 'send queue not available' });
+        if (typeof body?.messageId !== 'string') {
+          return send(res, 400, { error: 'messageId required' });
+        }
+        await opts.cancelSend(body.messageId);
+        return send(res, 200, { ok: true });
+      } catch (error) {
+        const e = error as Error;
+        console.error(`[mail-worker] ${url.pathname} failed:`, e.message);
+        return send(res, 500, { error: e.message });
+      }
     }
 
     let method: string;

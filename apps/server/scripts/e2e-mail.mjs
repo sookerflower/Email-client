@@ -242,6 +242,54 @@ await leg('get', async () => {
   throw new Error(`sent thread "${sentSubject}" not found in first 15 threads`);
 });
 
+await leg('scheduled-send', async () => {
+  // Outbox-backed delayed send (Phase 4 §4): schedule a self-addressed mail
+  // ~8 s out, and undo-send a second one — the BullMQ delayed job is the
+  // timer, the outbox row is the source of truth.
+  const scheduledSubject = `e2e scheduled ${runId}`;
+  const first = await trpc('mail.send', {
+    mutationBody: {
+      to: [{ email: mode.email, name: 'E2E' }],
+      subject: scheduledSubject,
+      message: `<p>e2e scheduled marker ${runId}</p>`,
+      attachments: [],
+      headers: {},
+      scheduleAt: new Date(Date.now() + 8000).toISOString(),
+    },
+  });
+  if (!first?.queued || !first?.messageId)
+    throw new Error(`scheduled send not queued: ${JSON.stringify(first)}`);
+
+  const second = await trpc('mail.send', {
+    mutationBody: {
+      to: [{ email: mode.email, name: 'E2E' }],
+      subject: `e2e cancelled ${runId}`,
+      message: `<p>should never send ${runId}</p>`,
+      attachments: [],
+      headers: {},
+      scheduleAt: new Date(Date.now() + 120_000).toISOString(),
+    },
+  });
+  if (!second?.queued || !second?.messageId)
+    throw new Error(`second scheduled send not queued: ${JSON.stringify(second)}`);
+  const undo = await trpc('mail.unsend', { mutationBody: { messageId: second.messageId } });
+  if (!undo?.success) throw new Error(`unsend failed: ${JSON.stringify(undo)}`);
+
+  if (REAL) {
+    // Arrival assertion is GreenMail-only to keep the real run's wall-clock
+    // sane; the timer->outbox->driver path is identical on both.
+    return `queued ${first.messageId} + undo-send verified (arrival asserted on greenmail)`;
+  }
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 3000));
+    if (await subjectInInbox(scheduledSubject)) {
+      return `"${scheduledSubject}" delivered by delayed job + undo-send verified`;
+    }
+  }
+  throw new Error(`"${scheduledSubject}" not delivered 90s after its 8s schedule`);
+});
+
 await leg('sent-sync', async () => {
   const result = await trpc('connections.list', { query: null });
   const all = result?.connections ?? [];

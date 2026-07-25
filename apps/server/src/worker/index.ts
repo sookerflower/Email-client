@@ -27,7 +27,7 @@ import { join } from 'node:path';
 import { startMailWorker } from './core';
 import { startLeaderLease } from './leader-lease';
 import { startJobRuntime, type JobRuntime } from './jobs';
-import { enqueueSyncFolder } from '../lib/queue';
+import { cancelSendEmail, enqueueSendEmail, enqueueSyncFolder } from '../lib/queue';
 
 // The worker runs bundled (dist-node/worker.mjs) with cwd = apps/server, so
 // paths resolve from cwd, not import.meta.url.
@@ -57,6 +57,9 @@ const worker = startMailWorker({
   pollSeconds: Number(process.env.IMAP_POLL_SECONDS ?? 600),
   watchersEnabled: () => isLeader,
   enqueueSync: enqueueSyncFolder,
+  enqueueSend: (messageId, connectionId, sendAt) =>
+    enqueueSendEmail(messageId, connectionId, new Date(sendAt)),
+  cancelSend: cancelSendEmail,
   // Legacy sidecar JSON store, imported once if still present.
   legacyLabelStorePath: join(process.cwd(), 'imap-sidecar', '.label-store.json'),
 });

@@ -127,6 +127,37 @@ const queueStub = (name) => ({
   },
 });
 
+// Phase 4 §4: the send-email queue is real on Node — delivery timers are
+// BullMQ delayed jobs hosted by the worker process. The app code's
+// send(msg, { delaySeconds }) contract is preserved; the shim forwards to
+// the worker's /enqueue-send. Any delay works — no 12-hour split.
+const sendEmailQueueStub = () => ({
+  send: async (msg) => {
+    const base = process.env.IMAP_SIDECAR_URL || 'http://127.0.0.1:8791';
+    const res = await fetch(`${base}/enqueue-send`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-imap-sidecar-secret': process.env.IMAP_SIDECAR_SECRET || '',
+      },
+      body: JSON.stringify({
+        messageId: msg.messageId,
+        connectionId: msg.connectionId,
+        sendAt: msg.sendAt,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`enqueue-send failed: HTTP ${res.status} ${body.slice(0, 200)}`);
+    }
+  },
+  sendBatch: async (msgs) => {
+    for (const entry of msgs ?? []) {
+      await sendEmailQueueStub().send(entry.body ?? entry);
+    }
+  },
+});
+
 const r2Stub = (name) => ({
   get: () => notPorted(`R2 ${name}.get`),
   put: () => notPorted(`R2 ${name}.put`),
@@ -168,7 +199,7 @@ export const env = {
 
   thread_queue: queueStub('thread_queue'),
   subscribe_queue: queueStub('subscribe_queue'),
-  send_email_queue: queueStub('send_email_queue'),
+  send_email_queue: sendEmailQueueStub(),
 
   THREADS_BUCKET: r2Stub('THREADS_BUCKET'),
   AI: aiStub,

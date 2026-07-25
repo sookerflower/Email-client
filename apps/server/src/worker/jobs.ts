@@ -20,13 +20,18 @@ import {
   QUEUE_NAMES,
   claimSyncDirty,
   closeQueues,
+  enqueueSendEmail,
   enqueueSyncFolder,
   getQueue,
+  hasLiveSendJob,
   isSyncDirty,
   startQueueWorker,
+  type SendEmailJobData,
   type SyncFolderJobData,
 } from '../lib/queue';
+import { toAttachmentFiles, type SerializedAttachment } from '../lib/attachments';
 import { connection as connectionSchema } from '../db/schema';
+import { outboxStore, snoozeStore } from '../lib/stores';
 import { MailEngine } from '../lib/mail-engine';
 import { createDb } from '../db';
 import { env } from '../env';
@@ -76,6 +81,54 @@ async function processSyncJob(job: Job): Promise<unknown> {
   });
 }
 
+/**
+ * send-email processor (§4): the outbox row is the source of truth, the job
+ * is just the timer. Port of the CF queue consumer (old main.ts Entry.queue
+ * send-email branch) minus its swallow-everything catch: transport errors
+ * RETHROW so BullMQ retries; the final-failure hook below marks the row
+ * 'failed' — nothing is ever silently dropped.
+ */
+async function processSendJob(job: Job): Promise<unknown> {
+  if (job.name !== 'send-email') {
+    throw new Error(`Unknown ${QUEUE_NAMES.send} job: ${job.name}`);
+  }
+  const { messageId, connectionId } = job.data as SendEmailJobData;
+
+  const row = await outboxStore.getById(messageId);
+  if (!row) throw new Error(`No outbox row for scheduled email ${messageId}`);
+  // Fire-time status re-check: the row decides, not the job's existence
+  // (undo-send may have failed to remove the job — that's fine).
+  if (row.status === 'cancelled') return { skipped: 'cancelled' };
+  if (row.status === 'sent') return { skipped: 'already sent' };
+  if (row.status === 'failed') return { skipped: 'failed (manual re-send required)' };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const payload = row.payload as any;
+  if (Array.isArray(payload.attachments)) {
+    payload.attachments = payload.attachments.map((att: SerializedAttachment) =>
+      'arrayBuffer' in att && typeof (att as { arrayBuffer?: unknown }).arrayBuffer === 'function'
+        ? att
+        : toAttachmentFiles([att])[0],
+    );
+  }
+
+  const engine = await MailEngine.init(connectionId);
+  if (payload.draftId) {
+    const { draftId, ...rest } = payload;
+    await engine.sendDraft(draftId, rest);
+  } else {
+    await engine.create(payload);
+  }
+
+  const marked = await outboxStore.markSent(messageId);
+  if (!marked) {
+    // A cancel raced in after the transport send left — too late to unsend,
+    // but never resend. Loud, for the human to reconcile.
+    console.warn(`[jobs] send ${messageId}: sent, but row was cancelled mid-send (not resending)`);
+  }
+  return { sent: true };
+}
+
 /** Enqueue a sent-folder sync for every IMAP connection (bug #2 fix). */
 async function scheduleSentFolderSyncs(): Promise<{ scheduled: number }> {
   const { db } = createDb(env.HYPERDRIVE.connectionString);
@@ -89,6 +142,54 @@ async function scheduleSentFolderSyncs(): Promise<{ scheduled: number }> {
   return { scheduled: rows.length };
 }
 
+/**
+ * Reconciliation sweep (§4): any unsent outbox row past its send_at with no
+ * live timer job gets re-enqueued (covers rows created while the worker was
+ * down and Redis data loss — the Postgres row is what survives).
+ */
+async function reconcileOutbox(): Promise<{ examined: number; requeued: number }> {
+  const due = await outboxStore.listOverdueUnsent(new Date());
+  let requeued = 0;
+  for (const row of due) {
+    if (await hasLiveSendJob(row.id)) continue;
+    await enqueueSendEmail(row.id, row.connectionId, row.sendAt);
+    await outboxStore.markQueued(row.id);
+    requeued += 1;
+    console.log(`[jobs] outbox-reconcile: re-enqueued overdue send ${row.id}`);
+  }
+  return { examined: due.length, requeued };
+}
+
+/**
+ * Unsnooze sweep (§3): wakes due snoozes back into the inbox. The old cron
+ * dispatch was commented out (main.ts) — snooze set wake times that nothing
+ * ever honored; this makes snooze actually work.
+ */
+async function unsnoozeSweep(): Promise<{ connections: number; threads: number }> {
+  const due = await snoozeStore.listDue(new Date());
+  const byConnection = new Map<string, string[]>();
+  for (const { connectionId, threadId } of due) {
+    const list = byConnection.get(connectionId) ?? [];
+    list.push(threadId);
+    byConnection.set(connectionId, list);
+  }
+  for (const [connectionId, threadIds] of byConnection) {
+    try {
+      const engine = await MailEngine.init(connectionId);
+      await engine.unsnoozeThreadsHandler({ connectionId, threadIds });
+      console.log(`[jobs] unsnooze-sweep: woke ${threadIds.length} thread(s) on ${connectionId}`);
+    } catch (error) {
+      // Per-connection isolation; the failed batch stays due and the next
+      // sweep retries it.
+      console.error(
+        `[jobs] unsnooze-sweep failed for ${connectionId}:`,
+        (error as Error).message,
+      );
+    }
+  }
+  return { connections: byConnection.size, threads: due.length };
+}
+
 async function processSweepJob(job: Job): Promise<unknown> {
   switch (job.name) {
     case 'ping':
@@ -98,6 +199,10 @@ async function processSweepJob(job: Job): Promise<unknown> {
       return { at: Date.now() };
     case 'sync-sent-folders':
       return await scheduleSentFolderSyncs();
+    case 'outbox-reconcile':
+      return await reconcileOutbox();
+    case 'unsnooze-sweep':
+      return await unsnoozeSweep();
     default:
       // Rethrow-on-error discipline (§3): unknown work is a loud failure,
       // never a silent skip.
@@ -116,6 +221,29 @@ export async function startJobRuntime(): Promise<JobRuntime> {
   // 2-slot pool let two slow real-server jobs starve a GreenMail inbox
   // sync past the E2E window).
   const syncWorker = startQueueWorker(QUEUE_NAMES.sync, processSyncJob, { concurrency: 8 });
+
+  // Sends are strictly sequential per process: parallel SMTP submissions
+  // multiplex the same cached driver, and volume is tiny.
+  const sendWorker = startQueueWorker(QUEUE_NAMES.send, processSendJob, { concurrency: 1 });
+
+  // Exhausted retries -> the row is marked 'failed' + a beacon hook (logged
+  // no-op until Phase 5 SSE). This is the anti-silent-drop guarantee.
+  sendWorker.on('failed', (job, error) => {
+    if (!job || job.name !== 'send-email') return;
+    const attempts = typeof job.opts.attempts === 'number' ? job.opts.attempts : 1;
+    if (job.attemptsMade < attempts) return; // retries remain
+    const { messageId, connectionId } = job.data as SendEmailJobData;
+    void outboxStore
+      .markFailed(messageId, error.message)
+      .then(() =>
+        console.warn(
+          `[jobs] beacon (pending Phase 5): send-failed ${messageId} on ${connectionId} — ${error.message}`,
+        ),
+      )
+      .catch((markError) =>
+        console.error(`[jobs] failed to mark outbox ${messageId} failed:`, markError),
+      );
+  });
 
   // Trailing edge of the dedup: a notify that landed mid-sync set the dirty
   // flag; the dedup key is released on completion, so re-enqueue here picks
@@ -145,14 +273,33 @@ export async function startJobRuntime(): Promise<JobRuntime> {
     { every: SENT_SYNC_EVERY_MS },
     { name: 'sync-sent-folders' },
   );
+  await sweepQueue.upsertJobScheduler(
+    'outbox-reconcile',
+    { every: 10 * 60 * 1000 },
+    { name: 'outbox-reconcile' },
+  );
+  await sweepQueue.upsertJobScheduler(
+    'unsnooze-sweep',
+    { every: 10 * 60 * 1000 },
+    { name: 'unsnooze-sweep' },
+  );
 
-  console.log('[jobs] queue workers started (sweep, sync); schedulers: heartbeat, sync-sent-folders');
+  // Startup reconciliation: don't wait for the first repeatable tick to
+  // recover sends that came due while the worker was down.
+  void reconcileOutbox().catch((error) =>
+    console.error('[jobs] startup outbox reconcile failed:', (error as Error).message),
+  );
+
+  console.log(
+    '[jobs] queue workers started (sweep, sync, send); schedulers: heartbeat, sync-sent-folders, outbox-reconcile, unsnooze-sweep',
+  );
 
   return {
-    workers: [sweepWorker, syncWorker],
+    workers: [sweepWorker, syncWorker, sendWorker],
     close: async () => {
       await sweepWorker.close();
       await syncWorker.close();
+      await sendWorker.close();
       await closeQueues();
     },
   };

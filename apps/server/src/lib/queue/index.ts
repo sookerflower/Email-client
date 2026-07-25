@@ -9,7 +9,7 @@
  * --dry-run` keeps building.
  *
  * Queues:
- *   mail-sync   sync-folder jobs (§3) — deterministic jobId + debounce
+ *   mail-sync   sync-folder jobs (§3) — deduplicated notify-driven syncs
  *   mail-send   outbox-backed delayed send-email jobs (§4)
  *   mail-sweep  repeatable schedulers (unsnooze sweep, outbox
  *               reconciliation, heartbeat)
@@ -80,6 +80,50 @@ export async function enqueueSyncFolder(connectionId: string, folder: string): P
   await queue.add('sync-folder', data, {
     deduplication: { id: `sync-folder:${connectionId}:${folder}` },
   });
+}
+
+export interface SendEmailJobData {
+  messageId: string;
+  connectionId: string;
+}
+
+/**
+ * Enqueue the delivery timer for an outbox row (§4). The Postgres row is
+ * the source of truth; this job is just the timer. Deterministic jobId
+ * `send-{messageId}` is safe here (unlike sync-folder): a messageId is a
+ * fresh UUID enqueued at most once, and the id doubles as the handle for
+ * undo-send removal and reconciliation idempotency. (Custom jobIds cannot
+ * contain `:` — hence the dash.) BullMQ delayed jobs take any duration —
+ * the old 12-hour KV/cron split is gone.
+ */
+export async function enqueueSendEmail(
+  messageId: string,
+  connectionId: string,
+  sendAt: Date,
+): Promise<void> {
+  const data: SendEmailJobData = { messageId, connectionId };
+  await getQueue(QUEUE_NAMES.send).add('send-email', data, {
+    jobId: `send-${messageId}`,
+    delay: Math.max(0, sendAt.getTime() - Date.now()),
+  });
+}
+
+/**
+ * Undo-send: drop the delayed job. Best-effort — an already-active job
+ * cannot be removed, which is fine because the handler re-checks the
+ * outbox row status at fire time (the row is the source of truth).
+ */
+export async function cancelSendEmail(messageId: string): Promise<void> {
+  const job = await getQueue(QUEUE_NAMES.send).getJob(`send-${messageId}`);
+  if (job) await job.remove().catch(() => undefined);
+}
+
+/** True if a live (delayed/waiting/active) timer job exists for the row. */
+export async function hasLiveSendJob(messageId: string): Promise<boolean> {
+  const job = await getQueue(QUEUE_NAMES.send).getJob(`send-${messageId}`);
+  if (!job) return false;
+  const state = await job.getState();
+  return state === 'delayed' || state === 'waiting' || state === 'active' || state === 'prioritized';
 }
 
 const syncDirtyKey = (connectionId: string, folder: string) =>

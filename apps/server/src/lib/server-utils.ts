@@ -115,14 +115,20 @@ const getCounts = async (connectionId: string): Promise<CountResult[]> => {
  */
 export const sendDoState = async (connectionId: string) => {
   try {
-    const counts = await getCounts(connectionId);
+    const [counts, storageSize] = await Promise.all([
+      getCounts(connectionId),
+      getDatabaseSize(connectionId),
+    ]);
+    // Wire shape unchanged from the DO era — the client destructures
+    // { isSyncing, syncingFolders, storageSize, counts, shards }. Only the
+    // numbers' provenance changed (Postgres); shards is 0 forever.
     const message = {
       type: OutgoingMessageType.Do_State,
       isSyncing: false,
       syncingFolders: ['inbox'],
-      storageSize: 0, // TODO(Phase 3.4): per-connection Postgres estimate
+      storageSize,
       counts,
-      shards: 0, // shard concept removed in Phase 3
+      shards: 0,
     };
 
     if (isNodeRuntime) {

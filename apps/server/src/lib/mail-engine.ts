@@ -6,6 +6,7 @@ import {
   deleteSpamThreads,
   findThreads,
   getAllSubjects,
+  getIndexSizeBytes,
   getIndexedThread,
   getRecentSenders,
   getThreadLabels,
@@ -13,6 +14,8 @@ import {
   upsertThread,
   type IndexLabel,
 } from './mail-index';
+import { generateWhatUserCaresAbout, type UserTopic } from './analyze/interests';
+import { redis } from './services';
 import type { IGetThreadResponse, IGetThreadsResponse, MailManager } from './driver/types';
 import type { ParsedMessage } from '../types';
 import { getThreadBlobStore, threadBlobKey } from './blob-store';
@@ -590,14 +593,48 @@ export class MailEngine {
     }
   }
 
-  /** TODO(Phase 3.4): topic generation moves here with a Redis cache. */
-  async getUserTopics(): Promise<{ topic: string; usecase: string }[]> {
-    return [];
+  /**
+   * AI topic suggestions, cached in Redis (Phase 3.4: replaces the DO
+   * ctx.storage cache). Generation is guarded by SET NX so two processes
+   * don't regenerate at once; a lost lock just means this caller returns []
+   * and the winner fills the cache — stale regeneration is benign.
+   */
+  async getUserTopics(): Promise<UserTopic[]> {
+    const cacheKey = `topics:${this.connectionId}`;
+    const cached = await redis().get(cacheKey);
+    if (cached) {
+      try {
+        return (typeof cached === 'string' ? JSON.parse(cached) : cached) as UserTopic[];
+      } catch {
+        // fall through to regeneration on a corrupt cache entry
+      }
+    }
+
+    const lock = await redis().set(`topics:lock:${this.connectionId}`, '1', {
+      nx: true,
+      ex: 120,
+    });
+    if (lock !== 'OK') return [];
+
+    try {
+      const subjects = await getAllSubjects(this.connectionId);
+      const topics = await generateWhatUserCaresAbout(subjects.slice(-200));
+      await redis().set(cacheKey, JSON.stringify(topics), { ex: 24 * 60 * 60 });
+      this.broadcast({ type: OutgoingMessageType.User_Topics });
+      return topics;
+    } catch (error) {
+      console.error(`[MailEngine:${this.connectionId}] topic generation failed:`, error);
+      return [];
+    } finally {
+      await redis()
+        .del(`topics:lock:${this.connectionId}`)
+        .catch(() => undefined);
+    }
   }
 
-  /** TODO(Phase 3.4): real per-connection storage estimate from Postgres. */
-  getDatabaseSize(): number {
-    return 0;
+  /** Approximate index size in bytes from Postgres (Do_State storageSize). */
+  async getDatabaseSize(): Promise<number> {
+    return await getIndexSizeBytes(this.connectionId);
   }
 }
 

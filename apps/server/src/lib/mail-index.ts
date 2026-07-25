@@ -247,6 +247,27 @@ export const getRecentSenders = async (
 };
 
 /**
+ * Approximate on-disk size of a connection's index rows (Phase 3.4: the
+ * Do_State `storageSize` replacement for the old per-shard SQLite
+ * databaseSize — which also only covered the index, since bodies lived in
+ * R2/blobs).
+ */
+export const getIndexSizeBytes = async (connectionId: string): Promise<number> => {
+  const result = await db().execute(sql`
+    SELECT (
+      COALESCE((SELECT SUM(pg_column_size(t.*)) FROM ${thread} t
+                WHERE t.connection_id = ${connectionId}), 0)
+      + COALESCE((SELECT SUM(pg_column_size(tl.*)) FROM ${threadLabel} tl
+                  WHERE tl.connection_id = ${connectionId}), 0)
+      + COALESCE((SELECT SUM(pg_column_size(l.*)) FROM ${label} l
+                  WHERE l.connection_id = ${connectionId}), 0)
+    )::bigint AS bytes
+  `);
+  const row = (result as unknown as { bytes: string | number }[])[0];
+  return Number(row?.bytes ?? 0);
+};
+
+/**
  * Unified thread query: label filtering (any/all), text search, keyset
  * pagination on latestReceivedOn. Collapses the six special cases of the
  * DO-SQLite queryThreads into one indexed query.

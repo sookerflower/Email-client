@@ -32,15 +32,27 @@ with the incidents and verification numbers. Read it before doing anything.
   in Redis; Do_State from pg counts. `ZeroDriver`/`ShardRegistry`/`ZeroDB`
   are EMPTY DO shells kept only so `wrangler deploy --dry-run` still builds.
 
-### Next: Phase 4 — BullMQ (needs user go before starting)
-Per MIGRATION-PLAN.md §3/§4: `sync-folder` jobs (deterministic jobId +
-debounce, page checkpointing into `folder_sync_state`, bounded concurrency
-**3 — do not raise**), outbox-backed `send-email` delayed jobs + undo,
-unsnooze sweep, repeatables replacing the cron handler. Also fold in: a
-one-shot reconnect-retry in the worker driver cache (transient post-APPEND
-`Command failed` seen on m.re.cx — old bug #1's failure class). Then Phase 5
-(SSE + HTTP chat replacing the agents-SDK WS; broadcasts are currently a
-logged no-op hook in MailEngine), Phase 6 (hardening/cutover).
+- **Phase 4 (closed 2026-07-25)**: BullMQ on Valkey TCP (`QUEUE_REDIS_URL`,
+  default redis://127.0.0.1:6379 — NOT the Upstash proxy). Queues
+  mail-sync/mail-send/mail-sweep; processors live in the worker process;
+  **never import `lib/queue` from workerd-reachable code** (main.ts and
+  below) — the api reaches the queues via the worker's /enqueue-send +
+  /cancel-send HTTP bridge (cf-shim's send_email_queue). `sync-folder`
+  jobs: page-checkpointed into `folder_sync_state` (retries resume; fresh
+  jobs never honor stale checkpoints), per-account serialization, extended
+  dedup + dirty-flag trailing re-enqueue, per-thread concurrency **3 — do
+  not raise**. Sent-folder repeatable fixed old bug #2; the /rpc one-shot
+  reconnect-retry closed old bug #1 (E2E `drop-recover` leg guards it).
+  `send-email` delayed jobs ride the outbox row (12h split gone); sweeps:
+  outbox-reconcile + unsnooze (snooze actually works now). Bull Board:
+  `node scripts/bull-board.mjs` (:8793, unbundled on purpose).
+
+### Next: Phase 5 (needs user go before starting) — flagged HIGH RISK
+SSE + HTTP chat replacing the agents-SDK WS; broadcasts are currently a
+logged no-op hook in MailEngine/jobs. Then Phase 6 (hardening/cutover).
+E2E `--real` note: sent-sync/idle-push windows are 240 s because full-
+refetch syncs run 2–4 min on m.re.cx; incremental sync (post-Phase-4 gap
+list) is what shrinks them.
 
 ## How to run / verify (Windows, Node 22)
 - Build both bundles: `node src/node/build.mjs` (from `apps/server`).

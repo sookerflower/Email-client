@@ -1,4 +1,4 @@
-import { thread, label, threadLabel } from '../db/schema';
+import { thread, label, threadLabel, folderSyncState } from '../db/schema';
 import { eq, and, count, inArray, sql, desc, lt, or, ilike, isNotNull } from 'drizzle-orm';
 import type { Sender } from '../types';
 import { createDb } from '../db';
@@ -330,4 +330,48 @@ export const findThreads = async (
     hasNextPage && last?.latestReceivedOn ? last.latestReceivedOn.toISOString() : null;
 
   return { threads: page.map(toIndexThread), nextPageToken };
+};
+
+// ---------------------------------------------------------------------------
+// Folder sync checkpoints (Phase 4 §3): the sync-folder job persists its
+// provider pageToken after every page so a BullMQ retry resumes the page
+// loop instead of restarting it. pageToken = null means "no sync in
+// progress" (the last run completed).
+// ---------------------------------------------------------------------------
+
+export const getFolderSyncPageToken = async (
+  connectionId: string,
+  folder: string,
+): Promise<string | null> => {
+  const rows = await db()
+    .select({ pageToken: folderSyncState.pageToken })
+    .from(folderSyncState)
+    .where(and(eq(folderSyncState.connectionId, connectionId), eq(folderSyncState.folder, folder)))
+    .limit(1);
+  return rows[0]?.pageToken ?? null;
+};
+
+export const setFolderSyncPageToken = async (
+  connectionId: string,
+  folder: string,
+  pageToken: string | null,
+): Promise<void> => {
+  const now = new Date();
+  await db()
+    .insert(folderSyncState)
+    .values({
+      connectionId,
+      folder,
+      pageToken,
+      lastSyncedAt: pageToken === null ? now : null,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [folderSyncState.connectionId, folderSyncState.folder],
+      set: {
+        pageToken,
+        updatedAt: now,
+        ...(pageToken === null ? { lastSyncedAt: now } : {}),
+      },
+    });
 };

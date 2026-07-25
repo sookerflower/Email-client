@@ -458,7 +458,12 @@ export class ImapSmtpMailManager implements MailManager {
           let mailbox;
           try {
             mailbox = await client.mailboxOpen(path);
-          } catch {
+          } catch (error) {
+            // A missing/unselectable folder is fine to skip. A dead
+            // connection is not: skipping every folder would fabricate an
+            // empty thread ("No latest message") instead of surfacing the
+            // failure to the worker's reconnect retry.
+            if (!client.usable) throw error;
             continue;
           }
           if (mailbox.exists === 0) continue;

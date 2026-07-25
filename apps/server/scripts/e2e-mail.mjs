@@ -11,9 +11,20 @@
  *   6. list        — tRPC mail.listThreads(inbox) returns >= 1 thread
  *   7. get         — our sent thread found; body marker present; labels
  *                    include INBOX (folder-label regression guard)
- *   8. idle-push   — raw SMTP delivery (bypassing the app), then poll list
- *                    WITHOUT any manual sync until the count increments:
- *                    watcher -> /api/public/imap-notify -> auto-sync
+ *   8. sent-sync   — enqueue sync-folder:{connectionId}:sent (BullMQ) and
+ *                    poll the app's Sent view until our sent message shows
+ *                    with the SENT label (known bug #2 regression guard)
+ *   9. idle-push   — raw SMTP delivery (bypassing the app), then poll list
+ *                    WITHOUT any manual sync until the message arrives:
+ *                    watcher -> sync-folder job -> auto-sync
+ *  10. drop-recover (greenmail only) — docker-restart GreenMail to kill the
+ *                    worker's cached IMAP connection mid-session, then
+ *                    require the next driver-backed op to succeed with NO
+ *                    manual retry (known bug #1 regression guard: the /rpc
+ *                    one-shot reconnect). On --real the same path is
+ *                    covered by the natural post-APPEND drops; recovery
+ *                    shows up as "recovered after reconnect" in the worker
+ *                    log.
  *
  * Usage:
  *   node scripts/e2e-mail.mjs               # GreenMail (default)
@@ -231,6 +242,44 @@ await leg('get', async () => {
   throw new Error(`sent thread "${sentSubject}" not found in first 15 threads`);
 });
 
+await leg('sent-sync', async () => {
+  const result = await trpc('connections.list', { query: null });
+  const all = result?.connections ?? [];
+  const connectionId = (all.find((c) => c.email === mode.email) ?? all[0])?.id;
+  if (!connectionId) throw new Error('connections.list returned no connection');
+
+  // Enqueue exactly what the repeatable sent-folder scheduler enqueues.
+  const { Queue } = await import('bullmq');
+  const IORedis = (await import('ioredis')).default;
+  const conn = new IORedis(process.env.QUEUE_REDIS_URL ?? 'redis://127.0.0.1:6379', {
+    maxRetriesPerRequest: null,
+  });
+  const queue = new Queue('mail-sync', { connection: conn });
+  await queue.add('sync-folder', { connectionId, folder: 'sent' });
+  await queue.close();
+
+  // Real-server window: the sent job serializes behind any in-flight inbox
+  // sync for the account (~2 min under full-refetch).
+  const sentWindowMs = REAL ? 240_000 : 90_000;
+  const deadline = Date.now() + sentWindowMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const sent = await trpc('mail.listThreads', { query: { folder: 'sent', maxResults: 20 } });
+    for (const t of (sent?.threads ?? []).slice(0, 10)) {
+      const thread = await trpc('mail.get', { query: { id: t.id } });
+      if (thread?.latest?.subject === sentSubject) {
+        const labelIds = (thread.labels ?? []).map((l) => l.id);
+        if (!labelIds.includes('SENT'))
+          throw new Error(`SENT label missing (labels: ${labelIds.join(',') || 'none'})`);
+        return `"${sentSubject}" in Sent view with SENT label`;
+      }
+    }
+  }
+  throw new Error(
+    `"${sentSubject}" not in Sent view after ${sentWindowMs / 1000}s — sent sync not working`,
+  );
+});
+
 if (SKIP_IDLE) {
   console.log('[e2e] SKIP idle-push (--skip-idle)');
 } else {
@@ -240,14 +289,48 @@ if (SKIP_IDLE) {
     // Assert on the ARRIVAL OF THE MESSAGE ITSELF (newest-first ordering puts
     // it on page 1), not on a count — counts saturate at one page and go
     // stale on mailboxes with more threads than the page size.
-    const deadline = Date.now() + 90_000;
+    // Real-server window covers the worst case under full-refetch sync: a
+    // mid-flight inbox job whose listing predates the message must finish
+    // (~100 s) before the dirty-flag re-enqueue syncs the new arrival.
+    // Incremental sync (next work item) will let this tighten again.
+    const windowMs = REAL ? 240_000 : 90_000;
+    const deadline = Date.now() + windowMs;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 3000));
       if (await subjectInInbox(idleSubject)) {
         return `"${idleSubject}" auto-synced into inbox, no manual refresh`;
       }
     }
-    throw new Error(`"${idleSubject}" not in inbox after 90s — IDLE push not working`);
+    throw new Error(
+      `"${idleSubject}" not in inbox after ${windowMs / 1000}s — IDLE push not working`,
+    );
+  });
+}
+
+if (!REAL) {
+  await leg('drop-recover', async () => {
+    // Kill every IMAP connection out from under the worker's driver cache.
+    const { execSync } = await import('node:child_process');
+    execSync('docker restart greenmail-test', { stdio: 'ignore' });
+    const deadline = Date.now() + 30_000;
+    for (;;) {
+      try {
+        await tcpProbe('127.0.0.1', 3143);
+        break;
+      } catch {
+        if (Date.now() > deadline) throw new Error('greenmail did not come back after restart');
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+    // TCP-accept precedes IMAP readiness on a restarting GreenMail; give
+    // the greeting a moment so the leg tests OUR reconnect, not GreenMail
+    // boot latency.
+    await new Promise((r) => setTimeout(r, 3000));
+    // The cached driver still looks `usable`; this op's failure is the
+    // detection, and the /rpc reconnect retry must make it green with no
+    // manual retry from here.
+    await trpc('mail.forceSync', { mutationBody: null });
+    return 'forceSync green over a freshly killed connection (auto-reconnect, no manual retry)';
   });
 }
 

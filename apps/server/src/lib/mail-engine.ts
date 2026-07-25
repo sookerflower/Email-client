@@ -12,6 +12,8 @@ import {
   getThreadLabels,
   modifyThreadLabels,
   upsertThread,
+  getFolderSyncPageToken,
+  setFolderSyncPageToken,
   type IndexLabel,
 } from './mail-index';
 import { generateWhatUserCaresAbout, type UserTopic } from './analyze/interests';
@@ -489,6 +491,88 @@ export class MailEngine {
     await this.reloadFolder(folder);
     console.log(`[MailEngine:${this.connectionId}] syncFolderOnce(${folder}): ${synced}/${ids.length}`);
     return { synced, total: ids.length };
+  }
+
+  /**
+   * Job-mode folder sync (Phase 4 §3): sequential page loop with the
+   * pageToken checkpointed to folder_sync_state after every completed page,
+   * so a BullMQ retry resumes where the failed attempt stopped instead of
+   * restarting. Per-thread concurrency stays bounded at 3 (fail2ban-safe —
+   * do not raise). Errors are RETHROWN so the queue's retry policy is real;
+   * the in-flight page is redone on retry, which is safe because thread
+   * upserts are idempotent.
+   */
+  async syncFolderJob(
+    folder: string,
+    opts?: { resume?: boolean },
+  ): Promise<{ synced: number; total: number; pages: number }> {
+    const pageSize = 20;
+    const maxTotal = maxSyncCount();
+    const folderLabel = this.normalizeFolderName(folder).toUpperCase();
+    // Resume only applies to a RETRY of the same job. A fresh job honoring a
+    // stale checkpoint (left by a job that exhausted its retries or died
+    // with the process) would start mid-listing and skip the newest page —
+    // exactly the mail a fresh sync exists to fetch.
+    let pageToken: string | undefined;
+    if (opts?.resume) {
+      pageToken = (await getFolderSyncPageToken(this.connectionId, folder)) ?? undefined;
+      if (pageToken) {
+        console.log(
+          `[MailEngine:${this.connectionId}] syncFolderJob(${folder}): retry resuming at pageToken ${pageToken}`,
+        );
+      }
+    } else {
+      await setFolderSyncPageToken(this.connectionId, folder, null);
+    }
+
+    let synced = 0;
+    let total = 0;
+    let pages = 0;
+    for (;;) {
+      const listing = await this.driver.list({ folder, maxResults: pageSize, pageToken });
+      const ids = listing.threads.map((t) => t.id);
+      total += ids.length;
+      pages += 1;
+
+      const concurrency = 3;
+      for (let i = 0; i < ids.length; i += concurrency) {
+        const batch = ids.slice(i, i + concurrency);
+        const results = await Promise.all(
+          batch.map((id) => this.syncThread({ threadId: id, extraLabelIds: [folderLabel] })),
+        );
+        synced += results.filter((r) => r.success).length;
+        // "No latest message" is a data condition (e.g. thread emptied
+        // between list and get), not a transient error — skip it, don't
+        // fail the job over it. Everything else is converted to a thrown
+        // error so BullMQ retries (checkpoint still points at this page).
+        const skipped = results.filter((r) => !r.success && r.reason === 'No latest message');
+        if (skipped.length) {
+          console.warn(
+            `[MailEngine:${this.connectionId}] syncFolderJob(${folder}) page ${pages}: skipped ${skipped.length} empty thread(s)`,
+          );
+        }
+        const failed = results.filter((r) => !r.success && r.reason !== 'No latest message');
+        if (failed.length) {
+          throw new Error(
+            `syncFolderJob(${folder}) page ${pages}: ${failed.length}/${batch.length} thread syncs failed — first: ${failed[0]?.reason ?? 'unknown'}`,
+          );
+        }
+      }
+
+      const next = listing.nextPageToken ?? null;
+      if (!next || Number(next) >= maxTotal) {
+        await setFolderSyncPageToken(this.connectionId, folder, null);
+        break;
+      }
+      await setFolderSyncPageToken(this.connectionId, folder, next);
+      pageToken = next;
+    }
+
+    await this.reloadFolder(folder);
+    console.log(
+      `[MailEngine:${this.connectionId}] syncFolderJob(${folder}): ${synced}/${total} over ${pages} page(s)`,
+    );
+    return { synced, total, pages };
   }
 
   async syncFolders() {

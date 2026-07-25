@@ -33,6 +33,13 @@ export interface MailWorkerOptions {
   pollSeconds: number;
   /** Consulted dynamically; false = serve /rpc but hold no IDLE watchers. */
   watchersEnabled: () => boolean;
+  /**
+   * Phase 4: when set, new-mail events enqueue a sync-folder job directly
+   * (the worker process hosts the processors) instead of POSTing the api's
+   * /api/public/imap-notify. The HTTP path remains as the fallback for the
+   * legacy sidecar wrapper, which has no queue runtime.
+   */
+  enqueueSync?: (connectionId: string, folder: string) => Promise<void>;
   /** Optional legacy .label-store.json to import once at boot. */
   legacyLabelStorePath?: string;
 }
@@ -90,13 +97,28 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
     return `${imap.username}@${imap.imapHost}:${imap.imapPort}#${digest}`;
   };
 
-  const evict = (key: string) => {
+  const evict = (key: string): Promise<void> => {
     const entry = cache.get(key);
-    if (!entry) return;
+    if (!entry) return Promise.resolve();
     cache.delete(key);
     clearTimeout(entry.timer);
-    void entry.driver.dispose().catch(() => undefined);
+    // Returned (not just fired) so the reconnect path can await the old
+    // socket's teardown before opening a replacement — never two concurrent
+    // driver connections for one account (3.2 invariant).
+    return entry.driver.dispose().catch(() => undefined);
   };
+
+  /**
+   * Errors that mean "the cached IMAP connection is dead", not "the request
+   * is wrong": imapflow surfaces post-drop command failures as bare
+   * `Command failed` / NoConnection, plus the usual socket error family.
+   * Auth and argument errors deliberately do NOT match — retrying those on
+   * a fresh connection would double the load for a deterministic failure.
+   */
+  const isConnectionError = (error: Error & { code?: string }): boolean =>
+    /command failed|noconnection|connection not available|unexpected close|connection closed|socket|econnreset|epipe|etimedout|not usable|greeting never received/i.test(
+      `${error.code ?? ''} ${error.message ?? ''}`,
+    );
 
   async function driverFor(auth: ManagerConfig['auth']): Promise<ImapSmtpMailManager> {
     const imap = auth.imap;
@@ -135,6 +157,18 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
   const watchers = new Map<string, Watcher>();
 
   async function notify(connectionId: string): Promise<void> {
+    if (opts.enqueueSync) {
+      try {
+        await opts.enqueueSync(connectionId, 'inbox');
+        console.log(`[mail-worker] notify ${connectionId}: sync-folder job enqueued`);
+      } catch (error) {
+        console.warn(
+          `[mail-worker] notify ${connectionId} enqueue failed:`,
+          (error as Error).message,
+        );
+      }
+      return;
+    }
     try {
       const res = await fetch(opts.notifyUrl, {
         method: 'POST',
@@ -358,17 +392,44 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
       return send(res, 400, { error: 'Invalid JSON body' });
     }
 
-    try {
+    const runMethod = async () => {
       const driver = await driverFor(auth);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const fn = (driver as any)[method];
       if (typeof fn !== 'function') {
-        return send(res, 400, { error: `Unknown method: ${method}` });
+        throw Object.assign(new Error(`Unknown method: ${method}`), { code: 'EUNKNOWN_METHOD' });
       }
-      const result = await fn.apply(driver, args);
+      return await fn.apply(driver, args);
+    };
+
+    try {
+      const result = await runMethod();
       return send(res, 200, { result: result ?? null });
     } catch (error) {
-      const e = error as Error & { code?: string };
+      let e = error as Error & { code?: string };
+      if (e.code === 'EUNKNOWN_METHOD') {
+        return send(res, 400, { error: e.message });
+      }
+      // One-shot reconnect retry (Phase 4.3, bug #1 closure): a dead cached
+      // connection reports `usable` until a command actually fails, so the
+      // failure IS the detection. Evict (awaiting the old socket's
+      // teardown), rebuild the driver, retry the op exactly once.
+      if (auth.imap && isConnectionError(e)) {
+        console.warn(
+          `[mail-worker] ${method} failed on cached connection (${e.message}) — evicting driver, one-shot reconnect retry`,
+        );
+        await evict(cacheKey(auth.imap));
+        // Brief settle: post-drop the server side may need a moment (e.g.
+        // it just restarted); an instant retry can hit the same wall.
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        try {
+          const result = await runMethod();
+          console.log(`[mail-worker] ${method} recovered after reconnect`);
+          return send(res, 200, { result: result ?? null });
+        } catch (retryError) {
+          e = retryError as Error & { code?: string };
+        }
+      }
       console.error(`[mail-worker] ${method} failed:`, e.message);
       return send(res, 500, { error: e.message, code: e.code });
     }

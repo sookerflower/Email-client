@@ -51,6 +51,58 @@ export const DEFAULT_JOB_OPTIONS: JobsOptions = {
 
 const queues = new Map<QueueName, Queue>();
 
+export interface SyncFolderJobData {
+  connectionId: string;
+  folder: string;
+}
+
+/**
+ * Enqueue a folder sync (§3), deduplicated per `{connectionId}:{folder}`.
+ *
+ * Extended dedup mode (id, no ttl): duplicates are dropped for as long as
+ * a job with this id is queued or running, and the key clears when it
+ * completes/fails. A ttl-window debounce is not enough — a folder sync on
+ * the real server runs minutes, and every IDLE notify past the window
+ * would enqueue another identical full sync (backlog that starves other
+ * folders of the same account behind the per-account lock). Not a custom
+ * jobId either: a deterministic jobId collides with the RETAINED
+ * completed/failed job of a previous run and silently drops future syncs.
+ * The watcher's own 2 s notify debounce handles event bursts.
+ */
+export async function enqueueSyncFolder(connectionId: string, folder: string): Promise<void> {
+  const queue = getQueue(QUEUE_NAMES.sync);
+  // Dirty flag first, then add: extended dedup silently drops adds while a
+  // job is queued/running, but a notify landing MID-SYNC may postdate the
+  // running job's listing — the flag lets the processor's completion hook
+  // re-enqueue once, so no new-mail signal is ever lost to dedup.
+  await flagRedis().set(syncDirtyKey(connectionId, folder), '1', 'EX', 3600);
+  const data: SyncFolderJobData = { connectionId, folder };
+  await queue.add('sync-folder', data, {
+    deduplication: { id: `sync-folder:${connectionId}:${folder}` },
+  });
+}
+
+const syncDirtyKey = (connectionId: string, folder: string) =>
+  `sync-dirty:${connectionId}:${folder}`;
+
+// Plain ioredis connection for the dirty flags (Queue#client is typed to a
+// minimal command surface that lacks set-with-EX/exists).
+let flagConnection: IORedis | null = null;
+const flagRedis = (): IORedis => {
+  flagConnection ??= createQueueConnection();
+  return flagConnection;
+};
+
+/** Consume the pending-notify marker; called by the processor as it starts listing. */
+export async function claimSyncDirty(connectionId: string, folder: string): Promise<void> {
+  await flagRedis().del(syncDirtyKey(connectionId, folder));
+}
+
+/** True if a notify arrived after the current sync claimed the folder. */
+export async function isSyncDirty(connectionId: string, folder: string): Promise<boolean> {
+  return (await flagRedis().exists(syncDirtyKey(connectionId, folder))) === 1;
+}
+
 /** Lazy per-process Queue singletons (safe to call from api or worker). */
 export function getQueue(name: QueueName): Queue {
   let queue = queues.get(name);
@@ -70,6 +122,10 @@ export function getQueue(name: QueueName): Queue {
 export async function closeQueues(): Promise<void> {
   await Promise.all([...queues.values()].map((queue) => queue.close().catch(() => undefined)));
   queues.clear();
+  if (flagConnection) {
+    flagConnection.disconnect();
+    flagConnection = null;
+  }
 }
 
 /**

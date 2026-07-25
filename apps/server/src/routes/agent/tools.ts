@@ -275,20 +275,32 @@ const createLabel = (connectionId: string) =>
     },
   });
 
-const bulkDelete = (connectionId: string) =>
+/**
+ * Approval-gated (Phase 5.3, AI SDK HITL cookbook pattern): defined WITHOUT
+ * an execute function, so the model's call surfaces to the client as a
+ * pending tool invocation; the client answers APPROVAL.YES/NO and
+ * processToolCalls runs `bulkDeleteExecute` from the chat route's
+ * executeFunctions map only on YES. Destructive action = the one tool that
+ * warrants a human in the loop.
+ */
+const bulkDelete = () =>
   tool({
-    description: 'Move multiple emails to trash by adding the TRASH label',
+    description:
+      'Move multiple emails to trash by adding the TRASH label. Requires user confirmation before it runs.',
     parameters: z.object({
       threadIds: z.array(z.string()).describe('Array of email IDs to move to trash'),
     }),
-    execute: async ({ threadIds }) => {
-      const { stub: agent } = await getZeroAgent(connectionId);
-      await Promise.all(
-        threadIds.map((threadId) => agent.modifyThreadLabelsInDB(threadId, ['TRASH'], [])),
-      );
-      return { threadIds, success: true };
-    },
   });
+
+export const bulkDeleteExecute =
+  (connectionId: string) =>
+  async ({ threadIds }: { threadIds: string[] }) => {
+    const { stub: agent } = await getZeroAgent(connectionId);
+    await Promise.all(
+      threadIds.map((threadId) => agent.modifyThreadLabelsInDB(threadId, ['TRASH'], [])),
+    );
+    return { threadIds, success: true };
+  };
 
 const bulkArchive = (connectionId: string) =>
   tool({
@@ -399,7 +411,7 @@ export const tools = async (connectionId: string) => {
     [Tools.GetUserLabels]: getUserLabels(connectionId),
     [Tools.SendEmail]: sendEmail(connectionId),
     [Tools.CreateLabel]: createLabel(connectionId),
-    [Tools.BulkDelete]: bulkDelete(connectionId),
+    [Tools.BulkDelete]: bulkDelete(),
     [Tools.BulkArchive]: bulkArchive(connectionId),
     [Tools.DeleteLabel]: deleteLabel(connectionId),
     [Tools.BuildGmailSearchQuery]: buildGmailSearchQuery(),

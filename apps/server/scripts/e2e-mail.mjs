@@ -235,18 +235,26 @@ await leg('list', async () => {
 });
 
 await leg('get', async () => {
-  for (const t of (await listInbox()).threads.slice(0, 15)) {
-    const thread = await trpc('mail.get', { query: { id: t.id } });
-    if (thread?.latest?.subject === sentSubject) {
-      const body = thread.messages.map((m) => m.decodedBody).join(' ');
-      if (!body.includes(`e2e marker ${runId}`)) throw new Error('body marker missing');
-      const labelIds = (thread.labels ?? []).map((l) => l.id);
-      if (!labelIds.includes('INBOX'))
-        throw new Error(`INBOX label missing (labels: ${labelIds.join(',') || 'none'})`);
-      return `subject + body + INBOX label verified`;
+  // Poll: the self-addressed message's SMTP delivery can land AFTER a fast
+  // forceSync completes (post-purge syncs are quick); the IDLE watcher then
+  // auto-syncs it — single-shot scanning raced that and flaked.
+  const deadline = Date.now() + (REAL ? 120_000 : 30_000);
+  for (;;) {
+    for (const t of (await listInbox()).threads.slice(0, 15)) {
+      const thread = await trpc('mail.get', { query: { id: t.id } });
+      if (thread?.latest?.subject === sentSubject) {
+        const body = thread.messages.map((m) => m.decodedBody).join(' ');
+        if (!body.includes(`e2e marker ${runId}`)) throw new Error('body marker missing');
+        const labelIds = (thread.labels ?? []).map((l) => l.id);
+        if (!labelIds.includes('INBOX'))
+          throw new Error(`INBOX label missing (labels: ${labelIds.join(',') || 'none'})`);
+        return `subject + body + INBOX label verified`;
+      }
     }
+    if (Date.now() > deadline)
+      throw new Error(`sent thread "${sentSubject}" not found in first 15 threads`);
+    await new Promise((r) => setTimeout(r, 3000));
   }
-  throw new Error(`sent thread "${sentSubject}" not found in first 15 threads`);
 });
 
 await leg('scheduled-send', async () => {

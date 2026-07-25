@@ -22,6 +22,7 @@ import { trpcServer } from '@hono/trpc-server';
 import { agentsMiddleware } from 'hono-agents';
 import { ZeroMCP } from './routes/agent/mcp';
 import { publicRouter } from './routes/auth';
+import { chatRouter } from './routes/chat';
 import { isNodeRuntime } from './lib/runtime';
 import { WorkflowRunner } from './pipelines';
 import { initTracing } from './lib/tracing';
@@ -186,6 +187,10 @@ const api = new Hono<HonoContext>()
   })
   .route('/ai', aiRouter)
   .route('/public', publicRouter)
+  // Phase 5.3: HTTP-streaming chat. Registered BEFORE the tRPC catch-all
+  // below, so /api/chat/* resolves here (5.1's SSE route couldn't do this
+  // because it registers late from the Node entrypoint).
+  .route('/chat', chatRouter)
   .on(['GET', 'POST', 'OPTIONS'], '/auth/*', (c) => {
     return c.var.auth.handler(c.req.raw);
   })

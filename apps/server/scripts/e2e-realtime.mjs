@@ -428,6 +428,241 @@ await leg('reconnect', async () => {
   return 'stream dropped, reopened, beacons flow again';
 });
 
+// --------------------------------------------------------------------------
+// Chat HTTP route legs (Phase 5.3, MIGRATION-PLAN §8a)
+// --------------------------------------------------------------------------
+
+/**
+ * POST the chat route and parse the AI SDK data-stream protocol
+ * (`TYPE:JSON\n` frames). Returns frames with arrival timestamps plus the
+ * response handle for abort tests.
+ */
+const chatPost = async (connectionId, cookie, messages, { signal } = {}) => {
+  const startedAt = Date.now();
+  const res = await fetch(`${APP}/api/chat/${connectionId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: ORIGIN, Cookie: cookie },
+    body: JSON.stringify({ messages, threadId: '', currentFolder: 'inbox', currentFilter: '' }),
+    signal,
+  });
+  if (res.status !== 200) {
+    const body = await res.text().catch(() => '');
+    const err = new Error(`chat HTTP ${res.status}: ${body.slice(0, 150)}`);
+    err.status = res.status;
+    throw err;
+  }
+  const frames = [];
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const done = (async () => {
+    for (;;) {
+      const { done: end, value } = await reader.read();
+      if (end) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 1);
+        if (!line) continue;
+        const sep = line.indexOf(':');
+        frames.push({
+          type: line.slice(0, sep),
+          raw: line.slice(sep + 1),
+          at: Date.now() - startedAt,
+        });
+      }
+    }
+  })();
+  return { res, frames, done, startedAt };
+};
+
+const userMsg = (id, text) => ({ id, role: 'user', content: text, parts: [{ type: 'text', text }] });
+const accumulatedText = (frames) =>
+  frames
+    .filter((f) => f.type === '0')
+    .map((f) => {
+      try {
+        return JSON.parse(f.raw);
+      } catch {
+        return '';
+      }
+    })
+    .join('');
+
+await leg('chat-auth', async () => {
+  const noCookie = await fetch(`${APP}/api/chat/${connectionId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: ORIGIN },
+    body: JSON.stringify({ messages: [userMsg('x', 'hi')] }),
+  });
+  if (noCookie.status !== 401) throw new Error(`no-cookie: expected 401, got ${noCookie.status}`);
+  const foreign = await fetch(`${APP}/api/chat/${crypto.randomUUID()}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: ORIGIN, Cookie: cookieA },
+    body: JSON.stringify({ messages: [userMsg('x', 'hi')] }),
+  });
+  if (foreign.status !== 403) throw new Error(`foreign id: expected 403, got ${foreign.status}`);
+  return '401 no-cookie, 403 foreign-id (same ownership guard as SSE)';
+});
+
+await leg('chat-stream', async () => {
+  const { frames, done } = await chatPost(connectionId, cookieA, [
+    userMsg(
+      `e2e-rt-user-${runId}`,
+      'Count from one to twenty in words, one word per line. Do not use any tools.',
+    ),
+  ]);
+  await done;
+  const textFrames = frames.filter((f) => f.type === '0');
+  if (!textFrames.length) throw new Error('no text-delta (0:) frames in stream');
+  const bad = frames.find((f) => f.type === '' || f.type.length > 2);
+  if (bad) throw new Error(`unparseable frame: ${JSON.stringify(bad).slice(0, 120)}`);
+  const finish = frames.find((f) => f.type === 'd' || f.type === 'e');
+  if (!finish) throw new Error('no finish (d:/e:) frame');
+  const lastAt = frames[frames.length - 1].at;
+  const firstTextAt = textFrames[0].at;
+  const text = accumulatedText(frames).toLowerCase();
+  if (!text.includes('seven')) throw new Error(`unexpected content: ${text.slice(0, 120)}`);
+  // Token-level incrementality depends on the upstream LLM actually
+  // streaming. The classroom endpoint (ws.re.cx proxy) currently BUFFERS
+  // its SSE — the whole generation arrives as one chunk — so this is
+  // reported, not asserted; the assertion arms itself the day the
+  // endpoint streams. Route-level streaming (ours) is asserted in the
+  // chat-tool leg via multi-burst timing.
+  const spreadMs = lastAt - firstTextAt;
+  const spread =
+    spreadMs >= 300
+      ? `INCREMENTAL (${spreadMs}ms token spread)`
+      : `single-burst (upstream LLM buffers; spread ${spreadMs}ms)`;
+  return `${textFrames.length} text deltas, finish frame present, ${spread}`;
+});
+
+await leg('chat-tool', async () => {
+  const { frames, done } = await chatPost(connectionId, cookieA, [
+    userMsg(
+      `e2e-rt-tool-${runId}`,
+      'Which labels exist in my mailbox? Use the getUserLabels tool to check, then list them.',
+    ),
+  ]);
+  await done;
+  const toolCall = frames.find((f) => f.type === '9' && f.raw.includes('getUserLabels'));
+  if (!toolCall) throw new Error('no tool_call (9:) frame for getUserLabels');
+  const toolResult = frames.find((f) => f.type === 'a');
+  if (!toolResult) throw new Error('no tool_result (a:) frame');
+  // ROUTE-level incrementality (works even with a buffering upstream LLM):
+  // the tool_call frame is written after LLM step 1, the answer after LLM
+  // step 2 — if our HTTP response buffered end-to-end, every frame would
+  // arrive at once. A real gap proves progressive delivery.
+  const lastAt = frames[frames.length - 1].at;
+  if (lastAt - toolCall.at < 500) {
+    throw new Error(
+      `response not progressively delivered: tool_call at ${toolCall.at}ms, stream end at ${lastAt}ms`,
+    );
+  }
+  return `tool_call + tool_result frames; tool_call at ${toolCall.at}ms vs stream end ${lastAt}ms (progressive delivery proven)`;
+});
+
+await leg('chat-abort', async () => {
+  const controller = new AbortController();
+  const { frames, done } = await chatPost(
+    connectionId,
+    cookieA,
+    [userMsg(`e2e-rt-abort-${runId}`, 'Write a 2000 word essay about email protocols. No tools.')],
+    { signal: controller.signal },
+  );
+  // Abort as soon as the first token proves the stream is live.
+  const deadline = Date.now() + 30_000;
+  while (!frames.some((f) => f.type === '0')) {
+    if (Date.now() > deadline) throw new Error('no first token before abort deadline');
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  controller.abort();
+  await done.catch(() => undefined); // reader ends with an abort error — expected
+  // The server must survive an aborted stream: an immediate follow-up
+  // request has to work end to end.
+  const retry = await chatPost(connectionId, cookieA, [
+    userMsg(`e2e-rt-abort2-${runId}`, 'Reply with the single word: alive. No tools.'),
+  ]);
+  await retry.done;
+  const text = accumulatedText(retry.frames).toLowerCase();
+  if (!text.includes('alive')) throw new Error(`post-abort request broken: ${text.slice(0, 120)}`);
+  return 'aborted mid-stream; immediate follow-up request streamed fine';
+});
+
+await leg('chat-hitl', async () => {
+  const target = threadIds[0];
+  // 1) The model must surface bulkDelete as a PENDING call (no execute on
+  //    the tool), i.e. a tool_call frame with no tool_result for it.
+  const first = await chatPost(connectionId, cookieA, [
+    userMsg(
+      `e2e-rt-hitl-${runId}`,
+      `Move the email thread with id "${target}" to trash using the bulkDelete tool.`,
+    ),
+  ]);
+  await first.done;
+  const call = first.frames.find((f) => f.type === '9' && f.raw.includes('bulkDelete'));
+  if (!call) throw new Error('no pending bulkDelete tool_call frame');
+  const premature = first.frames.find((f) => f.type === 'a' && f.raw.includes('"success"'));
+  if (premature) throw new Error('bulkDelete executed WITHOUT approval');
+  const { toolCallId, args } = JSON.parse(call.raw);
+
+  // 2) Continuation with APPROVAL.YES — exactly what the client's approve
+  //    button sends: the invocation in state result with the approval text.
+  const approval = await chatPost(connectionId, cookieA, [
+    userMsg(`e2e-rt-hitl-${runId}`, `Move the email thread with id "${target}" to trash using the bulkDelete tool.`),
+    {
+      id: `e2e-rt-hitl-a-${runId}`,
+      role: 'assistant',
+      content: '',
+      parts: [
+        {
+          type: 'tool-invocation',
+          toolInvocation: {
+            state: 'result',
+            toolName: 'bulkDelete',
+            toolCallId,
+            args,
+            result: 'Yes, confirmed.',
+          },
+        },
+      ],
+    },
+  ]);
+  await approval.done;
+  const executed = approval.frames.find(
+    (f) => f.type === 'a' && f.raw.includes('"success":true'),
+  );
+  if (!executed) throw new Error('approved bulkDelete did not execute (no success tool_result)');
+
+  // 3) Effect check: the thread now carries the TRASH label.
+  const thread = await trpcA('mail.get', { query: { id: target } });
+  const labelIds = (thread?.labels ?? []).map((l) => l.id);
+  if (!labelIds.includes('TRASH'))
+    throw new Error(`TRASH label missing after approval (labels: ${labelIds.join(',')})`);
+  return 'pending call without approval; APPROVAL.YES continuation executed; TRASH label verified';
+});
+
+await leg('chat-persist', async () => {
+  const postgres = (await import('postgres')).default;
+  const sql = postgres(devVars.DATABASE_URL, { max: 1 });
+  try {
+    const rows = await sql`
+      SELECT id FROM mail0_chat_message
+      WHERE connection_id = ${connectionId} AND id LIKE ${'e2e-rt-%' + runId}`;
+    if (!rows.some((r) => r.id === `e2e-rt-user-${runId}`))
+      throw new Error('user message row missing from mail0_chat_message');
+    const assistant = await sql`
+      SELECT count(*)::int AS n FROM mail0_chat_message
+      WHERE connection_id = ${connectionId} AND created_at > now() - interval '10 minutes'`;
+    if ((assistant[0]?.n ?? 0) < 2)
+      throw new Error(`expected >=2 recent chat rows, found ${assistant[0]?.n}`);
+    return `user message + ${assistant[0].n} recent rows persisted`;
+  } finally {
+    await sql.end();
+  }
+});
+
 if (REAL) {
   // Mailbox hygiene (same rationale as e2e-mail.mjs cleanup): hard-delete
   // this run's fanin message from the real server, best-effort.

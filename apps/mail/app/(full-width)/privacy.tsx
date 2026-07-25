@@ -1,6 +1,6 @@
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
-import { Github, Mail, ArrowLeft, Link2 } from 'lucide-react';
+import { Mail, ArrowLeft, Link2 } from 'lucide-react';
 import { Navigation } from '@/components/navigation';
 import { Button } from '@/components/ui/button';
 import Footer from '@/components/home/footer';
@@ -93,18 +93,18 @@ const sections = [
     content: (
       <div className="space-y-4">
         <p>
-          At Zero, we believe that privacy is a fundamental right. Our open-source email solution is
+          At AxMail, we believe that privacy is a fundamental right. Our open-source email solution is
           built with privacy at its core, and we&apos;re committed to being transparent about how we
           handle your data.
         </p>
         <p className="font-semibold">
-          Important: Zero is a client-only email application. We DO NOT store your emails on our
+          Important: AxMail is a client-only email application. We DO NOT store your emails on our
           servers. All email data is processed directly between your browser and Gmail.
         </p>
         <p>Our verified privacy commitments:</p>
         <ul className="ml-4 list-disc space-y-2">
           <li>
-            Zero Email Storage: We never store your emails - they remain in your Gmail account
+            AxMail Email Storage: We never store your emails - they remain in your Gmail account
           </li>
           <li>Client-Side Processing: All email processing happens in your browser</li>
           <li>Open Source: Our entire codebase is public and can be audited</li>
@@ -403,36 +403,28 @@ const sections = [
         <div>
           <h3 className="mb-3 text-lg font-medium">Price Changes</h3>
           <ul className="ml-4 list-disc space-y-2">
-            <li>We reserve the right to modify subscription pricing at any time</li>
             <li>
-              Existing subscribers will be notified of price changes at least 30 days in advance
+              Pro subscriptions are non-refundable after purchase, subject to applicable local laws
             </li>
-            <li>Price changes will take effect at your next billing cycle</li>
-            <li>You may cancel your subscription before the price change takes effect</li>
+            <li>You can cancel your subscription at any time to prevent future charges</li>
+            <li>Your access to Pro features will continue until the end of your current billing period</li>
           </ul>
         </div>
       </div>
     ),
   },
   {
-    title: 'Contact',
+    title: 'Contact Us',
     content: (
       <div className="space-y-3">
         <p>For privacy-related questions or concerns:</p>
         <div className="flex flex-col space-y-2">
           <a
-            href="mailto:founders@0.email"
+            href="mailto:contact@axmail.dev"
             className="inline-flex items-center text-blue-600 hover:text-blue-800"
           >
             <Mail className="mr-2 h-4 w-4" />
-            founders@0.email
-          </a>
-          <a
-            href="https://github.com/Mail-0/Zero"
-            className="inline-flex items-center text-blue-600 hover:text-blue-800"
-          >
-            <Github className="mr-2 h-4 w-4" />
-            Open an issue on GitHub
+            contact@axmail.dev
           </a>
         </div>
       </div>

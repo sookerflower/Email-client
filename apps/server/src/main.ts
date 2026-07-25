@@ -1,568 +1,49 @@
 import {
-  createUpdatedMatrixFromNewEmail,
-  initializeStyleMatrixFromEmail,
-  type EmailMatrix,
-  type WritingStyleMatrix,
-} from './services/writing-style-service';
-import {
-  account,
-  connection,
-  note,
-  session,
-  user,
-  userHotkeys,
-  userSettings,
-  writingStyleMatrix,
-  emailTemplate,
-} from './db/schema';
-import {
   toAttachmentFiles,
   type SerializedAttachment,
   type AttachmentFile,
 } from './lib/attachments';
 import { SyncThreadsCoordinatorWorkflow } from './workflows/sync-threads-coordinator-workflow';
-import { WorkerEntrypoint, DurableObject, RpcTarget } from 'cloudflare:workers';
+import { WorkerEntrypoint, DurableObject } from 'cloudflare:workers';
 // import { instrument, type ResolveConfigFn } from '@microlabs/otel-cf-workers';
+import { outboxStore, snoozeStore, subscriptionStore } from './lib/stores';
 import { getZeroAgent, getZeroDB, verifyToken } from './lib/server-utils';
 import { SyncThreadsWorkflow } from './workflows/sync-threads-workflow';
 import { ShardRegistry, ZeroAgent, ZeroDriver } from './routes/agent';
 import { ThreadSyncWorker } from './routes/agent/sync-worker';
 import { oAuthDiscoveryMetadata } from 'better-auth/plugins';
 import { EProviders, type IEmailSendBatch } from './types';
-import { eq, and, desc, asc, inArray } from 'drizzle-orm';
 import { ThinkingMCP } from './lib/sequential-thinking';
 
 import { contextStorage } from 'hono/context-storage';
-import { defaultUserSettings } from './lib/schemas';
 import { createLocalJWKSet, jwtVerify } from 'jose';
 import { enableBrainFunction } from './lib/brain';
 import { trpcServer } from '@hono/trpc-server';
 import { agentsMiddleware } from 'hono-agents';
 import { ZeroMCP } from './routes/agent/mcp';
 import { publicRouter } from './routes/auth';
+import { isNodeRuntime } from './lib/runtime';
 import { WorkflowRunner } from './pipelines';
-import { autumnApi } from './routes/autumn';
 import { initTracing } from './lib/tracing';
 import { env, type ZeroEnv } from './env';
 import type { HonoContext } from './ctx';
-import { createDb, type DB } from './db';
+import { createDb } from './db';
 import { createAuth } from './lib/auth';
 import { aiRouter } from './routes/ai';
 import { appRouter } from './trpc';
 import { cors } from 'hono/cors';
 import { Hono } from 'hono';
 
-const SENTRY_HOST = 'o4509328786915328.ingest.us.sentry.io';
-const SENTRY_PROJECT_IDS = new Set(['4509328795303936']);
 
-export class DbRpcDO extends RpcTarget {
-  constructor(
-    private mainDo: ZeroDB,
-    private userId: string,
-  ) {
-    super();
-  }
-
-  async findUser(): Promise<typeof user.$inferSelect | undefined> {
-    return await this.mainDo.findUser(this.userId);
-  }
-
-  async findUserConnection(
-    connectionId: string,
-  ): Promise<typeof connection.$inferSelect | undefined> {
-    return await this.mainDo.findUserConnection(this.userId, connectionId);
-  }
-
-  async updateUser(data: Partial<typeof user.$inferInsert>) {
-    return await this.mainDo.updateUser(this.userId, data);
-  }
-
-  async deleteConnection(connectionId: string) {
-    return await this.mainDo.deleteConnection(connectionId, this.userId);
-  }
-
-  async findFirstConnection(): Promise<typeof connection.$inferSelect | undefined> {
-    return await this.mainDo.findFirstConnection(this.userId);
-  }
-
-  async findManyConnections(): Promise<(typeof connection.$inferSelect)[]> {
-    return await this.mainDo.findManyConnections(this.userId);
-  }
-
-  async findManyNotesByThreadId(threadId: string): Promise<(typeof note.$inferSelect)[]> {
-    return await this.mainDo.findManyNotesByThreadId(this.userId, threadId);
-  }
-
-  async createNote(payload: Omit<typeof note.$inferInsert, 'userId'>) {
-    return await this.mainDo.createNote(this.userId, payload as typeof note.$inferInsert);
-  }
-
-  async updateNote(noteId: string, payload: Partial<typeof note.$inferInsert>) {
-    return await this.mainDo.updateNote(this.userId, noteId, payload);
-  }
-
-  async updateManyNotes(
-    notes: { id: string; order: number; isPinned?: boolean | null }[],
-  ): Promise<boolean> {
-    return await this.mainDo.updateManyNotes(this.userId, notes);
-  }
-
-  async findManyNotesByIds(noteIds: string[]): Promise<(typeof note.$inferSelect)[]> {
-    return await this.mainDo.findManyNotesByIds(this.userId, noteIds);
-  }
-
-  async deleteNote(noteId: string) {
-    return await this.mainDo.deleteNote(this.userId, noteId);
-  }
-
-  async findNoteById(noteId: string): Promise<typeof note.$inferSelect | undefined> {
-    return await this.mainDo.findNoteById(this.userId, noteId);
-  }
-
-  async findHighestNoteOrder(): Promise<{ order: number } | undefined> {
-    return await this.mainDo.findHighestNoteOrder(this.userId);
-  }
-
-  async deleteUser() {
-    return await this.mainDo.deleteUser(this.userId);
-  }
-
-  async findUserSettings(): Promise<typeof userSettings.$inferSelect | undefined> {
-    return await this.mainDo.findUserSettings(this.userId);
-  }
-
-  async findUserHotkeys(): Promise<(typeof userHotkeys.$inferSelect)[]> {
-    return await this.mainDo.findUserHotkeys(this.userId);
-  }
-
-  async insertUserHotkeys(shortcuts: (typeof userHotkeys.$inferInsert)[]) {
-    return await this.mainDo.insertUserHotkeys(this.userId, shortcuts);
-  }
-
-  async insertUserSettings(settings: typeof defaultUserSettings) {
-    return await this.mainDo.insertUserSettings(this.userId, settings);
-  }
-
-  async updateUserSettings(settings: typeof defaultUserSettings) {
-    return await this.mainDo.updateUserSettings(this.userId, settings);
-  }
-
-  async createConnection(
-    providerId: EProviders,
-    email: string,
-    updatingInfo: {
-      expiresAt: Date;
-      scope: string;
-    },
-  ): Promise<{ id: string }[]> {
-    return await this.mainDo.createConnection(providerId, email, this.userId, updatingInfo);
-  }
-
-  async findConnectionById(
-    connectionId: string,
-  ): Promise<typeof connection.$inferSelect | undefined> {
-    return await this.mainDo.findConnectionById(connectionId);
-  }
-
-  async syncUserMatrix(connectionId: string, emailStyleMatrix: EmailMatrix) {
-    return await this.mainDo.syncUserMatrix(connectionId, emailStyleMatrix);
-  }
-
-  async findWritingStyleMatrix(
-    connectionId: string,
-  ): Promise<typeof writingStyleMatrix.$inferSelect | undefined> {
-    return await this.mainDo.findWritingStyleMatrix(connectionId);
-  }
-
-  async deleteActiveConnection(connectionId: string) {
-    return await this.mainDo.deleteActiveConnection(this.userId, connectionId);
-  }
-
-  async updateConnection(
-    connectionId: string,
-    updatingInfo: Partial<typeof connection.$inferInsert>,
-  ) {
-    return await this.mainDo.updateConnection(connectionId, updatingInfo);
-  }
-
-  async listEmailTemplates(): Promise<(typeof emailTemplate.$inferSelect)[]> {
-    return await this.mainDo.findManyEmailTemplates(this.userId);
-  }
-
-  async createEmailTemplate(payload: Omit<typeof emailTemplate.$inferInsert, 'userId'>) {
-    return await this.mainDo.createEmailTemplate(this.userId, payload);
-  }
-
-  async deleteEmailTemplate(templateId: string) {
-    return await this.mainDo.deleteEmailTemplate(this.userId, templateId);
-  }
-
-  async updateEmailTemplate(templateId: string, data: Partial<typeof emailTemplate.$inferInsert>) {
-    return await this.mainDo.updateEmailTemplate(this.userId, templateId, data);
-  }
-}
-
-class ZeroDB extends DurableObject<ZeroEnv> {
-  db: DB = createDb(this.env.HYPERDRIVE.connectionString).db;
-
-  async setMetaData(userId: string) {
-    return new DbRpcDO(this, userId);
-  }
-
-  async findUser(userId: string): Promise<typeof user.$inferSelect | undefined> {
-    return await this.db.query.user.findFirst({
-      where: eq(user.id, userId),
-    });
-  }
-
-  async findUserConnection(
-    userId: string,
-    connectionId: string,
-  ): Promise<typeof connection.$inferSelect | undefined> {
-    return await this.db.query.connection.findFirst({
-      where: and(eq(connection.userId, userId), eq(connection.id, connectionId)),
-    });
-  }
-
-  async updateUser(userId: string, data: Partial<typeof user.$inferInsert>) {
-    return await this.db.update(user).set(data).where(eq(user.id, userId));
-  }
-
-  async deleteConnection(connectionId: string, userId: string) {
-    const connections = await this.findManyConnections(userId);
-    if (connections.length <= 1) {
-      throw new Error('Cannot delete the last connection. At least one connection is required.');
-    }
-    return await this.db
-      .delete(connection)
-      .where(and(eq(connection.id, connectionId), eq(connection.userId, userId)));
-  }
-
-  async findFirstConnection(userId: string): Promise<typeof connection.$inferSelect | undefined> {
-    return await this.db.query.connection.findFirst({
-      where: eq(connection.userId, userId),
-    });
-  }
-
-  async findManyConnections(userId: string): Promise<(typeof connection.$inferSelect)[]> {
-    return await this.db.query.connection.findMany({
-      where: eq(connection.userId, userId),
-    });
-  }
-
-  async findManyNotesByThreadId(
-    userId: string,
-    threadId: string,
-  ): Promise<(typeof note.$inferSelect)[]> {
-    return await this.db.query.note.findMany({
-      where: and(eq(note.userId, userId), eq(note.threadId, threadId)),
-      orderBy: [desc(note.isPinned), asc(note.order), desc(note.createdAt)],
-    });
-  }
-
-  async createNote(userId: string, payload: typeof note.$inferInsert) {
-    return await this.db
-      .insert(note)
-      .values({
-        ...payload,
-        userId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .returning();
-  }
-
-  async updateNote(
-    userId: string,
-    noteId: string,
-    payload: Partial<typeof note.$inferInsert>,
-  ): Promise<typeof note.$inferSelect | undefined> {
-    const [updated] = await this.db
-      .update(note)
-      .set({
-        ...payload,
-        updatedAt: new Date(),
-      })
-      .where(and(eq(note.id, noteId), eq(note.userId, userId)))
-      .returning();
-    return updated;
-  }
-
-  async updateManyNotes(
-    userId: string,
-    notes: { id: string; order: number; isPinned?: boolean | null }[],
-  ): Promise<boolean> {
-    return await this.db.transaction(async (tx) => {
-      for (const n of notes) {
-        const updateData: Record<string, unknown> = {
-          order: n.order,
-          updatedAt: new Date(),
-        };
-
-        if (n.isPinned !== undefined) {
-          updateData.isPinned = n.isPinned;
-        }
-        await tx
-          .update(note)
-          .set(updateData)
-          .where(and(eq(note.id, n.id), eq(note.userId, userId)));
-      }
-      return true;
-    });
-  }
-
-  async findManyNotesByIds(
-    userId: string,
-    noteIds: string[],
-  ): Promise<(typeof note.$inferSelect)[]> {
-    return await this.db.query.note.findMany({
-      where: and(eq(note.userId, userId), inArray(note.id, noteIds)),
-    });
-  }
-
-  async deleteNote(userId: string, noteId: string) {
-    return await this.db.delete(note).where(and(eq(note.id, noteId), eq(note.userId, userId)));
-  }
-
-  async findNoteById(
-    userId: string,
-    noteId: string,
-  ): Promise<typeof note.$inferSelect | undefined> {
-    return await this.db.query.note.findFirst({
-      where: and(eq(note.id, noteId), eq(note.userId, userId)),
-    });
-  }
-
-  async findHighestNoteOrder(userId: string): Promise<{ order: number } | undefined> {
-    return await this.db.query.note.findFirst({
-      where: eq(note.userId, userId),
-      orderBy: desc(note.order),
-      columns: { order: true },
-    });
-  }
-
-  async deleteUser(userId: string) {
-    return await this.db.transaction(async (tx) => {
-      await tx.delete(connection).where(eq(connection.userId, userId));
-      await tx.delete(account).where(eq(account.userId, userId));
-      await tx.delete(session).where(eq(session.userId, userId));
-      await tx.delete(userSettings).where(eq(userSettings.userId, userId));
-      await tx.delete(user).where(eq(user.id, userId));
-      await tx.delete(userHotkeys).where(eq(userHotkeys.userId, userId));
-    });
-  }
-
-  async findUserSettings(userId: string): Promise<typeof userSettings.$inferSelect | undefined> {
-    return await this.db.query.userSettings.findFirst({
-      where: eq(userSettings.userId, userId),
-    });
-  }
-
-  async findUserHotkeys(userId: string): Promise<(typeof userHotkeys.$inferSelect)[]> {
-    return await this.db.query.userHotkeys.findMany({
-      where: eq(userHotkeys.userId, userId),
-    });
-  }
-
-  async insertUserHotkeys(userId: string, shortcuts: (typeof userHotkeys.$inferInsert)[]) {
-    return await this.db
-      .insert(userHotkeys)
-      .values({
-        userId,
-        shortcuts,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: userHotkeys.userId,
-        set: {
-          shortcuts,
-          updatedAt: new Date(),
-        },
-      });
-  }
-
-  async insertUserSettings(userId: string, settings: typeof defaultUserSettings) {
-    return await this.db.insert(userSettings).values({
-      id: crypto.randomUUID(),
-      userId,
-      settings,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-  }
-
-  async updateUserSettings(userId: string, settings: typeof defaultUserSettings) {
-    return await this.db
-      .insert(userSettings)
-      .values({
-        id: crypto.randomUUID(),
-        userId,
-        settings,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: userSettings.userId,
-        set: {
-          settings,
-          updatedAt: new Date(),
-        },
-      });
-  }
-
-  async createConnection(
-    providerId: EProviders,
-    email: string,
-    userId: string,
-    updatingInfo: {
-      expiresAt: Date;
-      scope: string;
-    },
-  ): Promise<{ id: string }[]> {
-    return await this.db
-      .insert(connection)
-      .values({
-        ...updatingInfo,
-        providerId,
-        id: crypto.randomUUID(),
-        email,
-        userId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: [connection.email, connection.userId],
-        set: {
-          ...updatingInfo,
-          updatedAt: new Date(),
-        },
-      })
-      .returning({ id: connection.id });
-  }
-
-  /**
-   * @param connectionId Dangerous, use findUserConnection instead
-   * @returns
-   */
-  async findConnectionById(
-    connectionId: string,
-  ): Promise<typeof connection.$inferSelect | undefined> {
-    return await this.db.query.connection.findFirst({
-      where: eq(connection.id, connectionId),
-    });
-  }
-
-  async syncUserMatrix(connectionId: string, emailStyleMatrix: EmailMatrix) {
-    await this.db.transaction(async (tx) => {
-      const [existingMatrix] = await tx
-        .select({
-          numMessages: writingStyleMatrix.numMessages,
-          style: writingStyleMatrix.style,
-        })
-        .from(writingStyleMatrix)
-        .where(eq(writingStyleMatrix.connectionId, connectionId));
-
-      if (existingMatrix) {
-        const newStyle = createUpdatedMatrixFromNewEmail(
-          existingMatrix.numMessages,
-          existingMatrix.style as WritingStyleMatrix,
-          emailStyleMatrix,
-        );
-
-        await tx
-          .update(writingStyleMatrix)
-          .set({
-            numMessages: existingMatrix.numMessages + 1,
-            style: newStyle,
-          })
-          .where(eq(writingStyleMatrix.connectionId, connectionId));
-      } else {
-        const newStyle = initializeStyleMatrixFromEmail(emailStyleMatrix);
-
-        await tx
-          .insert(writingStyleMatrix)
-          .values({
-            connectionId,
-            numMessages: 1,
-            style: newStyle,
-          })
-          .onConflictDoNothing();
-      }
-    });
-  }
-
-  async findWritingStyleMatrix(
-    connectionId: string,
-  ): Promise<typeof writingStyleMatrix.$inferSelect | undefined> {
-    return await this.db.query.writingStyleMatrix.findFirst({
-      where: eq(writingStyleMatrix.connectionId, connectionId),
-      columns: {
-        numMessages: true,
-        style: true,
-        updatedAt: true,
-        connectionId: true,
-      },
-    });
-  }
-
-  async deleteActiveConnection(userId: string, connectionId: string) {
-    return await this.db
-      .delete(connection)
-      .where(and(eq(connection.userId, userId), eq(connection.id, connectionId)));
-  }
-
-  async updateConnection(
-    connectionId: string,
-    updatingInfo: Partial<typeof connection.$inferInsert>,
-  ) {
-    return await this.db
-      .update(connection)
-      .set(updatingInfo)
-      .where(eq(connection.id, connectionId));
-  }
-
-  async findManyEmailTemplates(userId: string): Promise<(typeof emailTemplate.$inferSelect)[]> {
-    return await this.db.query.emailTemplate.findMany({
-      where: eq(emailTemplate.userId, userId),
-      orderBy: desc(emailTemplate.updatedAt),
-    });
-  }
-
-  async createEmailTemplate(
-    userId: string,
-    payload: Omit<typeof emailTemplate.$inferInsert, 'userId'>,
-  ) {
-    return await this.db
-      .insert(emailTemplate)
-      .values({
-        ...payload,
-        userId,
-        id: crypto.randomUUID(),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .returning();
-  }
-
-  async deleteEmailTemplate(userId: string, templateId: string) {
-    return await this.db
-      .delete(emailTemplate)
-      .where(and(eq(emailTemplate.id, templateId), eq(emailTemplate.userId, userId)));
-  }
-
-  async updateEmailTemplate(
-    userId: string,
-    templateId: string,
-    data: Partial<typeof emailTemplate.$inferInsert>,
-  ) {
-    return await this.db
-      .update(emailTemplate)
-      .set({ ...data, updatedAt: new Date() })
-      .where(and(eq(emailTemplate.id, templateId), eq(emailTemplate.userId, userId)))
-      .returning();
-  }
-}
+/**
+ * @deprecated Replaced by `UserDb` (src/lib/user-db.ts) in Phase 1 of
+ * MIGRATION-PLAN.md — ZeroDB never used DO storage; every method was a
+ * Postgres query, so the DO/RPC indirection was collapsed into a plain class.
+ * This empty shell exists only so wrangler.jsonc's ZERO_DB binding and DO
+ * migrations still resolve on the workerd path; it is deleted together with
+ * the other Durable Objects in Phase 3/6.
+ */
+class ZeroDB extends DurableObject<ZeroEnv> {}
 
 // Utility function to hash IP addresses for PII protection
 function hashIpAddress(ip: string | undefined): string | undefined {
@@ -704,7 +185,6 @@ const api = new Hono<HonoContext>()
     c.set('auth', undefined as any);
   })
   .route('/ai', aiRouter)
-  .route('/autumn', autumnApi)
   .route('/public', publicRouter)
   .on(['GET', 'POST', 'OPTIONS'], '/auth/*', (c) => {
     return c.var.auth.handler(c.req.raw);
@@ -817,47 +297,25 @@ const app = new Hono<HonoContext>()
   .route('/api', api)
   .use(
     '*',
-    agentsMiddleware({
-      options: {
-        onBeforeConnect: (c) => {
-          if (!c.headers.get('Cookie')) {
-            return new Response('Unauthorized', { status: 401 });
-          }
-        },
-      },
-    }),
+    // On Node the agents-SDK WebSocket layer is replaced in Phase 5 of the
+    // migration (SSE + HTTP chat); until then requests fall through so
+    // /health and friends keep working.
+    isNodeRuntime
+      ? async (_c, next) => {
+          await next();
+        }
+      : agentsMiddleware({
+          options: {
+            onBeforeConnect: (c) => {
+              if (!c.headers.get('Cookie')) {
+                return new Response('Unauthorized', { status: 401 });
+              }
+            },
+          },
+        }),
   )
   .get('/health', (c) => c.json({ message: 'Zero Server is Up!' }))
   .get('/', (c) => c.redirect(`${env.VITE_PUBLIC_APP_URL}`))
-  .post('/monitoring/sentry', async (c) => {
-    try {
-      const envelopeBytes = await c.req.arrayBuffer();
-      const envelope = new TextDecoder().decode(envelopeBytes);
-      const piece = envelope.split('\n')[0];
-      const header = JSON.parse(piece);
-      const dsn = new URL(header['dsn']);
-      const project_id = dsn.pathname?.replace('/', '');
-
-      if (dsn.hostname !== SENTRY_HOST) {
-        throw new Error(`Invalid sentry hostname: ${dsn.hostname}`);
-      }
-
-      if (!project_id || !SENTRY_PROJECT_IDS.has(project_id)) {
-        throw new Error(`Invalid sentry project id: ${project_id}`);
-      }
-
-      const upstream_sentry_url = `https://${SENTRY_HOST}/api/${project_id}/envelope/`;
-      await fetch(upstream_sentry_url, {
-        method: 'POST',
-        body: envelopeBytes,
-      });
-
-      return c.json({}, { status: 200 });
-    } catch (e) {
-      console.error('error tunneling to sentry', e);
-      return c.json({ error: 'error tunneling to sentry' }, { status: 500 });
-    }
-  })
   .post('/a8n/notify/:providerId', async (c) => {
     const tracer = initTracing();
     const span = tracer.startSpan('a8n_notify', {
@@ -984,26 +442,23 @@ export default class Entry extends WorkerEntrypoint<ZeroEnv> {
       case batch.queue.startsWith('send-email-queue'): {
         await Promise.all(
           batch.messages.map(async (msg: any) => {
-            const { messageId, connectionId, mail } = msg.body;
+            const { messageId, connectionId } = msg.body;
 
-            const { pending_emails_status: statusKV, pending_emails_payload: payloadKV } = this
-              .env as { pending_emails_status: KVNamespace; pending_emails_payload: KVNamespace };
-
-            const status = await statusKV.get(messageId);
-            if (status === 'cancelled') {
+            const row = await outboxStore.getById(messageId);
+            if (!row) {
+              console.error(`No outbox row found for scheduled email ${messageId}`);
+              return;
+            }
+            if (row.status === 'cancelled') {
               console.log(`Email ${messageId} cancelled – skipping send.`);
               return;
             }
-
-            let payload = mail;
-            if (!payload) {
-              const stored = await payloadKV.get(messageId);
-              if (!stored) {
-                console.error(`No payload found for scheduled email ${messageId}`);
-                return;
-              }
-              payload = JSON.parse(stored);
+            if (row.status === 'sent') {
+              console.log(`Email ${messageId} already sent – skipping duplicate delivery.`);
+              return;
             }
+
+            const payload = row.payload as any;
 
             const agent = await getZeroAgent(connectionId, this.ctx);
             try {
@@ -1038,13 +493,16 @@ export default class Entry extends WorkerEntrypoint<ZeroEnv> {
                 await agent.stub.create(payload as any);
               }
 
-              await statusKV.delete(messageId);
-              await payloadKV.delete(messageId);
+              await outboxStore.markSent(messageId);
               console.log(`Email ${messageId} sent successfully`);
             } catch (error) {
+              // Unlike the KV version (which deleted the payload and silently
+              // dropped the email), the outbox row survives as 'failed'.
               console.error(`Failed to send scheduled email ${messageId}:`, error);
-              await statusKV.delete(messageId);
-              await payloadKV.delete(messageId);
+              await outboxStore.markFailed(
+                messageId,
+                error instanceof Error ? error.message : String(error),
+              );
             }
           }),
         );
@@ -1103,53 +561,37 @@ export default class Entry extends WorkerEntrypoint<ZeroEnv> {
 
   private async processScheduledEmails() {
     console.log('Checking for scheduled emails ready to be queued...');
-    const { scheduled_emails: scheduledKV, send_email_queue } = this.env as {
-      scheduled_emails: KVNamespace;
-      send_email_queue: Queue<IEmailSendBatch>;
-    };
+    const { send_email_queue } = this.env as { send_email_queue: Queue<IEmailSendBatch> };
 
     try {
       const now = Date.now();
-      const twelveHoursFromNow = now + 12 * 60 * 60 * 1000;
+      const twelveHoursFromNow = new Date(now + 12 * 60 * 60 * 1000);
 
-      let cursor: string | undefined = undefined;
-      const batchSize = 1000;
+      // Outbox rows still 'pending' and due within the queue's delay horizon
+      // get a delivery timer; 'queued' marks them so the next sweep skips them.
+      const due = await outboxStore.listDuePending(twelveHoursFromNow);
 
-      do {
-        const listResp: {
-          keys: { name: string }[];
-          cursor?: string;
-        } = await scheduledKV.list({ cursor, limit: batchSize });
-        cursor = listResp.cursor;
+      for (const row of due) {
+        try {
+          const sendAt = row.sendAt.getTime();
+          const delaySeconds = Math.max(0, Math.floor((sendAt - now) / 1000));
 
-        for (const key of listResp.keys) {
-          try {
-            const scheduledData = await scheduledKV.get(key.name);
-            if (!scheduledData) continue;
+          console.log(`Queueing scheduled email ${row.id} with ${delaySeconds}s delay`);
 
-            const { messageId, connectionId, sendAt } = JSON.parse(scheduledData);
+          const queueBody: IEmailSendBatch = {
+            messageId: row.id,
+            connectionId: row.connectionId,
+            sendAt,
+          };
 
-            if (sendAt <= twelveHoursFromNow) {
-              const delaySeconds = Math.max(0, Math.floor((sendAt - now) / 1000));
+          await send_email_queue.send(queueBody, { delaySeconds });
+          await outboxStore.markQueued(row.id);
 
-              console.log(`Queueing scheduled email ${messageId} with ${delaySeconds}s delay`);
-
-              const queueBody: IEmailSendBatch = {
-                messageId,
-                connectionId,
-                sendAt,
-              };
-
-              await send_email_queue.send(queueBody, { delaySeconds });
-              await scheduledKV.delete(key.name);
-
-              console.log(`Successfully queued scheduled email ${messageId}`);
-            }
-          } catch (error) {
-            console.error('Failed to process scheduled email key', key.name, error);
-          }
+          console.log(`Successfully queued scheduled email ${row.id}`);
+        } catch (error) {
+          console.error('Failed to process scheduled email', row.id, error);
         }
-      } while (cursor);
+      }
     } catch (error) {
       console.error('Error processing scheduled emails:', error);
     }
@@ -1169,38 +611,20 @@ export default class Entry extends WorkerEntrypoint<ZeroEnv> {
 
     const expiredSubscriptions: Array<{ connectionId: string; providerId: EProviders }> = [];
 
-    const nowTs = Date.now();
-
     const unsnoozeMap: Record<string, { threadIds: string[]; keyNames: string[] }> = {};
 
-    let cursor: string | undefined = undefined;
-    do {
-      const listResp: {
-        keys: { name: string; metadata?: { wakeAt?: string } }[];
-        cursor?: string;
-      } = await this.env.snoozed_emails.list({ cursor, limit: 1000 });
-      cursor = listResp.cursor;
-
-      for (const key of listResp.keys) {
-        try {
-          const wakeAtIso = key.metadata?.wakeAt as string | undefined;
-          if (!wakeAtIso) continue;
-          const wakeAt = new Date(wakeAtIso).getTime();
-          if (wakeAt > nowTs) continue;
-
-          const [threadId, connectionId] = key.name.split('__');
-          if (!threadId || !connectionId) continue;
-
-          if (!unsnoozeMap[connectionId]) {
-            unsnoozeMap[connectionId] = { threadIds: [], keyNames: [] };
-          }
-          unsnoozeMap[connectionId].threadIds.push(threadId);
-          unsnoozeMap[connectionId].keyNames.push(key.name);
-        } catch (error) {
-          console.error('Failed to prepare unsnooze for key', key.name, error);
+    try {
+      const dueSnoozes = await snoozeStore.listDue(new Date());
+      for (const { connectionId, threadId } of dueSnoozes) {
+        if (!unsnoozeMap[connectionId]) {
+          unsnoozeMap[connectionId] = { threadIds: [], keyNames: [] };
         }
+        unsnoozeMap[connectionId].threadIds.push(threadId);
+        unsnoozeMap[connectionId].keyNames.push(`${threadId}__${connectionId}`);
       }
-    } while (cursor);
+    } catch (error) {
+      console.error('Failed to list due snoozes', error);
+    }
 
     // await Promise.all(
     //   Object.entries(unsnoozeMap).map(async ([connectionId, { threadIds, keyNames }]) => {
@@ -1215,10 +639,9 @@ export default class Entry extends WorkerEntrypoint<ZeroEnv> {
 
     await Promise.all(
       allAccounts.map(async ({ id, providerId }) => {
-        const lastSubscribed = await this.env.gmail_sub_age.get(`${id}__${providerId}`);
+        const subscriptionDate = await subscriptionStore.getSubscribedAt(id, providerId);
 
-        if (lastSubscribed) {
-          const subscriptionDate = new Date(lastSubscribed);
+        if (subscriptionDate) {
           if (subscriptionDate < fiveDaysAgo) {
             console.log(`[SCHEDULED] Found expired Google subscription for connection: ${id}`);
             expiredSubscriptions.push({ connectionId: id, providerId: providerId as EProviders });
@@ -1259,3 +682,6 @@ export {
   SyncThreadsCoordinatorWorkflow,
   ShardRegistry,
 };
+
+// Node entrypoint (src/node/entry.ts) serves the same app that workerd does.
+export { app };

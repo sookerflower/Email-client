@@ -2,34 +2,23 @@ import type { ThinkingMCP, ThreadSyncWorker, WorkflowRunner, ZeroDB, ZeroMCP } f
 import type { ShardRegistry, ZeroAgent, ZeroDriver } from './routes/agent';
 
 import { env as _env } from 'cloudflare:workers';
-import type { QueryableHandler } from 'dormroom';
 
 export type ZeroEnv = {
-  ZERO_DRIVER: DurableObjectNamespace<ZeroDriver & QueryableHandler>;
-  SHARD_REGISTRY: DurableObjectNamespace<ShardRegistry & QueryableHandler>;
+  ZERO_DRIVER: DurableObjectNamespace<ZeroDriver>;
+  SHARD_REGISTRY: DurableObjectNamespace<ShardRegistry>;
   ZERO_DB: DurableObjectNamespace<ZeroDB>;
   ZERO_AGENT: DurableObjectNamespace<ZeroAgent>;
-  ZERO_MCP: DurableObjectNamespace<ZeroMCP & QueryableHandler>;
-  THINKING_MCP: DurableObjectNamespace<ThinkingMCP & QueryableHandler>;
-  WORKFLOW_RUNNER: DurableObjectNamespace<WorkflowRunner & QueryableHandler>;
+  ZERO_MCP: DurableObjectNamespace<ZeroMCP>;
+  THINKING_MCP: DurableObjectNamespace<ThinkingMCP>;
+  WORKFLOW_RUNNER: DurableObjectNamespace<WorkflowRunner>;
 
   THREAD_SYNC_WORKER: DurableObjectNamespace<ThreadSyncWorker>;
   SYNC_THREADS_WORKFLOW: Workflow;
   SYNC_THREADS_COORDINATOR_WORKFLOW: Workflow;
   HYPERDRIVE: { connectionString: string };
-  pending_emails_status: KVNamespace;
-  pending_emails_payload: KVNamespace;
-  scheduled_emails: KVNamespace;
   send_email_queue: Queue;
-  snoozed_emails: KVNamespace;
-  gmail_sub_age: KVNamespace;
   subscribe_queue: Queue;
   AI: Ai;
-  gmail_history_id: KVNamespace;
-  gmail_processing_threads: KVNamespace;
-  subscribed_accounts: KVNamespace;
-  connection_labels: KVNamespace;
-  prompts_storage: KVNamespace;
   NODE_ENV: 'local' | 'development' | 'production';
   JWT_SECRET: 'secret';
   ELEVENLABS_API_KEY: '1234567890';
@@ -65,17 +54,31 @@ export type ZeroEnv = {
   REDIS_URL: string;
   REDIS_TOKEN: string;
   OPENAI_API_KEY: string;
+  // Optional OpenAI-compatible endpoint (Ollama/vLLM/...); see lib/ai-provider.ts
+  OPENAI_BASE_URL: string;
   BRAIN_URL: string;
   COMPOSIO_API_KEY: string;
   GROQ_API_KEY: string;
   EARLY_ACCESS_ENABLED: string;
   GOOGLE_GENERATIVE_AI_API_KEY: string;
-  AUTUMN_SECRET_KEY: string;
   AI_SYSTEM_PROMPT: string;
   PERPLEXITY_API_KEY: string;
   TWILIO_ACCOUNT_SID: string;
   TWILIO_AUTH_TOKEN: string;
   TWILIO_PHONE_NUMBER: string;
+  // IMAP transport sidecar (see apps/server/imap-sidecar/server.ts)
+  IMAP_SIDECAR_URL: string;
+  IMAP_SIDECAR_SECRET: string;
+  // Encrypts the imap connection password on save (worker) and decrypts it in
+  // the sidecar on use. 64 hex chars (32 bytes).
+  IMAP_ENCRYPTION_KEY: string;
+  // Default mail server for the "Custom IMAP/SMTP" login form, so users only
+  // type email + password. Optional; the form accepts overrides.
+  IMAP_DEFAULT_IMAP_HOST: string;
+  IMAP_DEFAULT_IMAP_PORT: string;
+  IMAP_DEFAULT_SMTP_HOST: string;
+  IMAP_DEFAULT_SMTP_PORT: string;
+  IMAP_DEFAULT_ALLOW_INSECURE_TLS: string;
   VITE_PUBLIC_ELEVENLABS_AGENT_ID: string;
   REACT_SCAN: string;
   MICROSOFT_CLIENT_ID: string;
@@ -90,8 +93,6 @@ export type ZeroEnv = {
   AXIOM_DATASET: string;
   THREADS_BUCKET: R2Bucket;
   thread_queue: Queue;
-  VECTORIZE: VectorizeIndex;
-  VECTORIZE_MESSAGE: VectorizeIndex;
   DEV_PROXY: string;
   MEET_AUTH_HEADER: string;
   MEET_API_URL: string;
@@ -99,9 +100,6 @@ export type ZeroEnv = {
   OTEL_EXPORTER_OTLP_ENDPOINT?: string;
   OTEL_EXPORTER_OTLP_HEADERS?: string;
   OTEL_SERVICE_NAME?: string;
-  DD_API_KEY: string;
-  DD_APP_KEY: string;
-  DD_SITE: string;
 };
 
 const env = _env as ZeroEnv;

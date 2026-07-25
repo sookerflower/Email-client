@@ -1,6 +1,5 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import type { ReactNode, HTMLAttributes } from 'react';
-import { PricingDialog } from '../ui/pricing-dialog';
 import { cn } from '@/lib/utils';
 
 interface SettingsCardProps extends HTMLAttributes<HTMLDivElement> {
@@ -35,7 +34,6 @@ export function SettingsCard({
       </CardHeader>
       <CardContent className="space-y-6 px-0">{children}</CardContent>
       {footer && <div className="border-t py-4">{footer}</div>}
-      <PricingDialog />
     </Card>
   );
 }

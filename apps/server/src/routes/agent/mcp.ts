@@ -84,28 +84,19 @@ export class ZeroMCP extends McpAgent<typeof env, Record<string, unknown>, { use
             ],
           };
         }
-        const response = await env.VECTORIZE.getByIds([s.id]);
-        const { result: thread } = await getThread(this.activeConnectionId, s.id);
-        if (response.length && response?.[0]?.metadata?.['summary'] && thread?.latest?.subject) {
-          const result = response[0].metadata as { summary: string; connection: string };
-          if (result.connection !== this.activeConnectionId) {
-            return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: 'No summary found for this connection',
-                },
-              ],
-            };
-          }
-          const shortResponse = await env.AI.run('@cf/facebook/bart-large-cnn', {
-            input_text: result.summary,
-          });
+        // Phase 3.3: Vectorize + Workers-AI replaced by the self-hosted LLM
+        // reading/writing the mail0_summary table. Content shape unchanged.
+        const { getOrGenerateThreadSummary } = await import('../../lib/summary-service');
+        const [short, { result: thread }] = await Promise.all([
+          getOrGenerateThreadSummary(this.activeConnectionId, s.id),
+          getThread(this.activeConnectionId, s.id),
+        ]);
+        if (short && thread?.latest?.subject) {
           return {
             content: [
               {
                 type: 'text' as const,
-                text: shortResponse.summary as string,
+                text: short,
               },
               {
                 type: 'text' as const,
@@ -113,7 +104,7 @@ export class ZeroMCP extends McpAgent<typeof env, Record<string, unknown>, { use
               },
               {
                 type: 'text' as const,
-                text: `Sender: ${thread.latest?.sender.name} <${thread.latest?.sender.email}>`,
+                text: `Sender: ${thread.latest?.sender?.name} <${thread.latest?.sender?.email}>`,
               },
               {
                 type: 'text' as const,
@@ -335,7 +326,7 @@ export class ZeroMCP extends McpAgent<typeof env, Record<string, unknown>, { use
               },
               {
                 type: 'text' as const,
-                text: `Latest Message Sender: ${thread.latest?.sender.name} <${thread.latest?.sender.email}>`,
+                text: `Latest Message Sender: ${loadedThread.latest?.sender?.name} <${loadedThread.latest?.sender?.email}>`,
               },
             ];
           }),

@@ -40,6 +40,34 @@ export interface IConfig {
   };
 }
 
+export type ImapSmtpAuthConfig = {
+  imapHost: string;
+  imapPort: number;
+  imapSecure: boolean;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecure: boolean;
+  username: string;
+  /**
+   * Plaintext password. Present only where the real ImapSmtpMailManager is
+   * constructed (the Node sidecar decrypts `passwordEncrypted` into this, and
+   * direct/test construction passes it straight in). Never persisted.
+   */
+  password?: string;
+  /**
+   * Ciphertext form as stored in the connection row. Carried over the wire to
+   * the sidecar, which decrypts it. Present on the workerd/proxy side where the
+   * plaintext must never appear.
+   */
+  passwordEncrypted?: string;
+  /**
+   * Explicit opt-in to accept self-signed / unverifiable TLS certificates
+   * (disables certificate validation for this connection only). Prefer
+   * installing a proper certificate on the mail server.
+   */
+  allowInsecureTls?: boolean;
+};
+
 export type ManagerConfig = {
   auth: {
     userId: string;
@@ -47,6 +75,14 @@ export type ManagerConfig = {
     accessToken: string;
     refreshToken: string;
     email: string;
+    /**
+     * Connection row id, set by connectionToDriver for the imap provider so
+     * the transport sidecar can register a new-mail watcher (IMAP IDLE) and
+     * report changes back for this connection. OAuth drivers ignore it.
+     */
+    connectionId?: string;
+    /** Present only for providerId 'imap'; OAuth drivers ignore it. */
+    imap?: ImapSmtpAuthConfig;
   };
 };
 

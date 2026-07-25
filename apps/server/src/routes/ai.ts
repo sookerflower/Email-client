@@ -1,5 +1,5 @@
 import { systemPrompt } from '../services/call-service/system-prompt';
-import { openai } from '@ai-sdk/openai';
+import { openai } from '../lib/ai-provider';
 import { tools } from './agent/tools';
 import { generateText } from 'ai';
 import { Tools } from '../types';

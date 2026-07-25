@@ -167,9 +167,20 @@ export function applyEmailPreferences(
       :host {
         display: block;
         line-height: 1.5;
-        background-color: ${isDarkTheme ? '#1A1A1A' : '#ffffff'};
-        color: ${isDarkTheme ? '#ffffff' : '#000000'};
+        background-color: ${isDarkTheme ? '#1A1A1A' : '#ffffff'} !important;
+        color: ${isDarkTheme ? '#ffffff' : '#000000'} !important;
       }
+
+      ${isDarkTheme ? `
+      * {
+        background-color: transparent !important;
+        background: transparent !important;
+        color: inherit !important;
+      }
+      a {
+        color: #60a5fa !important;
+      }
+      ` : ''}
 
       *, *::before, *::after {
         box-sizing: border-box;

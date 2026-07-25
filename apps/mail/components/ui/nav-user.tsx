@@ -1,12 +1,9 @@
 import {
-  HelpCircle,
   LogOut,
   MoonIcon,
   Settings,
   Plus,
   CopyCheckIcon,
-  BadgeCheck,
-  BanknoteIcon,
   RefreshCcw,
   Trash2,
 } from 'lucide-react';
@@ -29,7 +26,6 @@ import { AddConnectionDialog } from '../connection/add';
 import { CircleCheck, ThreeDots } from '../icons/icons';
 import { useTRPC } from '@/providers/query-provider';
 import { useSidebar } from '@/components/ui/sidebar';
-import { useBilling } from '@/hooks/use-billing';
 import { SunIcon } from '../icons/animated/sun';
 import { clear as idbClear } from 'idb-keyval';
 import { useLocation } from 'react-router';
@@ -99,11 +95,9 @@ export function NavUser() {
     trpc.connections.setDefault.mutationOptions(),
   );
   const { mutateAsync: handleForceSync } = useMutation(trpc.mail.forceSync.mutationOptions());
-  const { openBillingPortal, customer: billingCustomer, isPro } = useBilling();
   const pathname = useLocation().pathname;
   const queryClient = useQueryClient();
   const { data: activeConnection, refetch: refetchActiveConnection } = useActiveConnection();
-  const [, setPricingDialog] = useQueryState('pricingDialog');
   const [category] = useQueryState('category', { defaultValue: 'All Mail' });
   const { setLoading } = useLoading();
   const [{ isSyncing, syncingFolders, storageSize, shards }] = useDoState();
@@ -233,12 +227,6 @@ export function NavUser() {
                       <div className="w-full">
                         <div className="flex items-center justify-center gap-0.5 text-sm font-medium">
                           {activeAccount.name || session.user.name || 'User'}
-                          {isPro && (
-                            <BadgeCheck
-                              className="h-4 w-4 text-white dark:text-[#141414]"
-                              fill="#1D9BF0"
-                            />
-                          )}
                         </div>
                         <div className="text-muted-foreground text-xs">{activeAccount.email}</div>
                       </div>
@@ -343,37 +331,12 @@ export function NavUser() {
                       <p className="text-[13px] opacity-60">{m['common.navUser.appTheme']()}</p>
                     </div>
                   </DropdownMenuItem>
-                  <DropdownMenuItem asChild>
-                    <a
-                      href="https://discord.gg/mail0"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="w-full"
-                    >
-                      <div className="flex items-center gap-2">
-                        <HelpCircle size={16} className="opacity-60" />
-                        <p className="text-[13px] opacity-60">
-                          {m['common.navUser.customerSupport']()}
-                        </p>
-                      </div>
-                    </a>
-                  </DropdownMenuItem>
                   <DropdownMenuItem className="cursor-pointer" onSelect={() => handleLogout()}>
                     <div className="flex items-center gap-2">
                       <LogOut size={16} className="opacity-60" />
                       <p className="text-[13px] opacity-60">{m['common.actions.logout']()}</p>
                     </div>
                   </DropdownMenuItem>
-                  <DropdownMenuSeparator className="mt-1" />
-                  <div className="text-muted-foreground/60 flex items-center justify-center gap-1 px-2 pb-2 pt-1 text-[10px]">
-                    <a href="/privacy" className="hover:underline">
-                      Privacy
-                    </a>
-                    <span>·</span>
-                    <a href="/terms" className="hover:underline">
-                      Terms
-                    </a>
-                  </div>
                 </>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -508,22 +471,11 @@ export function NavUser() {
                 </DropdownMenu>
               )}
 
-              {isPro ? (
-                <AddConnectionDialog>
-                  <Button className="hover:bg-offsetLight/80 dark:hover:bg-offsetDark/80 flex h-7 w-7 cursor-pointer items-center justify-center rounded-[5px] border border-dashed bg-transparent px-0 text-black dark:bg-[#262626] dark:text-[#929292]">
-                    <Plus className="size-4" />
-                  </Button>
-                </AddConnectionDialog>
-              ) : (
-                <>
-                  <Button
-                    onClick={() => setPricingDialog('true')}
-                    className="hover:bg-offsetLight/80 dark:hover:bg-offsetDark/80 flex h-7 w-7 cursor-pointer items-center justify-center rounded-[5px] border border-dashed bg-transparent px-0 text-black dark:bg-[#262626] dark:text-[#929292]"
-                  >
-                    <Plus className="size-4" />
-                  </Button>
-                </>
-              )}
+              <AddConnectionDialog>
+                <Button className="hover:bg-offsetLight/80 dark:hover:bg-offsetDark/80 flex h-7 w-7 cursor-pointer items-center justify-center rounded-[5px] border border-dashed bg-transparent px-0 text-black dark:bg-[#262626] dark:text-[#929292]">
+                  <Plus className="size-4" />
+                </Button>
+              </AddConnectionDialog>
             </div>
 
             <div className="flex items-center justify-center gap-1">
@@ -545,14 +497,6 @@ export function NavUser() {
                   sideOffset={8}
                 >
                   <div className="space-y-1">
-                    {billingCustomer?.stripe_id ? (
-                      <DropdownMenuItem onClick={() => openBillingPortal()}>
-                        <div className="flex items-center gap-2">
-                          <BanknoteIcon size={16} className="opacity-60" />
-                          <p className="text-[13px] opacity-60">Billing</p>
-                        </div>
-                      </DropdownMenuItem>
-                    ) : null}
                   </div>
                   <p className="text-muted-foreground px-2 py-1 text-[11px] font-medium">Debug</p>
                   <DropdownMenuItem onClick={handleCopyConnectionId}>
@@ -594,37 +538,12 @@ export function NavUser() {
                       <p className="text-[13px] opacity-60">{m['common.navUser.appTheme']()}</p>
                     </div>
                   </DropdownMenuItem>
-                  <DropdownMenuItem>
-                    <a
-                      href="https://discord.gg/mail0"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="w-full"
-                    >
-                      <div className="flex items-center gap-2">
-                        <HelpCircle size={16} className="opacity-60" />
-                        <p className="text-[13px] opacity-60">
-                          {m['common.navUser.customerSupport']()}
-                        </p>
-                      </div>
-                    </a>
-                  </DropdownMenuItem>
                   <DropdownMenuItem className="cursor-pointer" onClick={handleLogout}>
                     <div className="flex items-center gap-2">
                       <LogOut size={16} className="opacity-60" />
                       <p className="text-[13px] opacity-60">{m['common.actions.logout']()}</p>
                     </div>
                   </DropdownMenuItem>
-                  <DropdownMenuSeparator className="mt-1" />
-                  <div className="text-muted-foreground/60 flex items-center justify-center gap-1 px-2 pb-2 pt-1 text-[10px]">
-                    <a href="/privacy" className="hover:underline">
-                      Privacy
-                    </a>
-                    <span>·</span>
-                    <a href="/terms" className="hover:underline">
-                      Terms
-                    </a>
-                  </div>
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
@@ -639,22 +558,10 @@ export function NavUser() {
               <p className={cn('max-w-[14.5ch] truncate text-[13px]')}>
                 {activeAccount?.name || session.user.name || 'User'}
               </p>
-              {isPro ? (
-                <BadgeCheck className="h-4 w-4 text-white dark:text-[#141414]" fill="#1D9BF0" />
-              ) : null}
             </div>
             <div className="h-5 max-w-[200px] overflow-hidden truncate text-xs font-normal leading-none text-[#898989]">
               {activeAccount?.email || session.user.email}
             </div>
-            {!isPro && (
-              <button
-                onClick={() => setPricingDialog('true')}
-                className="flex h-5 items-center gap-1 rounded-full border px-1 pr-1.5 hover:bg-transparent"
-              >
-                <BadgeCheck className="h-4 w-4 text-white dark:text-[#141414]" fill="#1D9BF0" />
-                <span className="text-muted-foreground text-[10px] uppercase">Get verified</span>
-              </button>
-            )}
           </div>
         </div>
       )}

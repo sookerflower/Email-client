@@ -4,14 +4,12 @@ import { useCommandPalette } from '../context/command-palette-context.jsx';
 import { LabelDialog } from '@/components/labels/label-dialog';
 import { useActiveConnection } from '@/hooks/use-connections';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import Intercom, { show } from '@intercom/messenger-js-sdk';
-import { MessageSquare, OldPhone } from '../icons/icons';
+import Intercom, {  } from '@intercom/messenger-js-sdk';
 import { useSidebar } from '../context/sidebar-context';
 import { useTRPC } from '@/providers/query-provider';
 import { type NavItem } from '@/config/navigation';
 import type { Label as LabelType } from '@/types';
 import { Link, useLocation } from 'react-router';
-import { m } from '../../paraglide/messages.js';
 import { Button } from '@/components/ui/button';
 import { useLabels } from '@/hooks/use-labels';
 import { Badge } from '@/components/ui/badge';
@@ -184,27 +182,6 @@ export function NavMain({ items }: NavMainProps) {
   return (
     <SidebarGroup className={`${state !== 'collapsed' ? '' : 'mt-1'} space-y-2.5 py-0 md:px-0`}>
       <SidebarMenu>
-        {isBottomNav ? (
-          <>
-            <SidebarMenuButton
-              onClick={() => show()}
-              tooltip={state === 'collapsed' ? m['common.commandPalette.groups.help']() : undefined}
-              className="hover:bg-subtleWhite flex cursor-pointer items-center dark:hover:bg-[#202020]"
-            >
-              <OldPhone className="relative mr-2.5 h-2 w-2 fill-[#8F8F8F]" />
-              <p className="relative bottom-0.5 mt-0.5 truncate text-[13px]">Live Support</p>
-            </SidebarMenuButton>
-            <NavItem
-              key={'feedback'}
-              isActive={isUrlActive('https://feedback.0.email')}
-              href={'https://feedback.0.email'}
-              url={'https://feedback.0.email'}
-              icon={MessageSquare}
-              target={'_blank'}
-              title={m['navigation.sidebar.feedback']()}
-            />
-          </>
-        ) : null}
         {items.map((section) => (
           <Collapsible
             key={section.title}

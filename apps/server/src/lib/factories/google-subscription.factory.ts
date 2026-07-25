@@ -1,3 +1,4 @@
+import { subscriptionStore } from '../stores';
 import { BaseSubscriptionFactory, type SubscriptionData } from './base-subscription.factory';
 import { c, getNotificationsUrl } from '../../lib/utils';
 import { resetConnection } from '../server-utils';
@@ -282,10 +283,7 @@ class GoogleSubscriptionFactory extends BaseSubscriptionFactory {
           throw error;
         });
 
-        await env.gmail_sub_age.put(
-          `${connectionId}__${EProviders.google}`,
-          new Date().toISOString(),
-        );
+        await subscriptionStore.setSubscribed(connectionId, EProviders.google);
 
         console.log(`[SUBSCRIPTION] Initializing labels for connection: ${connectionId}`);
         await this.initializeConnectionLabels(connectionId);
@@ -325,13 +323,15 @@ class GoogleSubscriptionFactory extends BaseSubscriptionFactory {
       return c.json({ error: 'connectionId is required' }, { status: 400 });
     }
 
-    const existingState = await env.subscribed_accounts.get(`${connectionId}__${providerId}`);
+    // String(undefined) === 'undefined' matches the old KV key semantics
+    // (`${id}__undefined` → never subscribed → early return).
+    const isSubscribed = await subscriptionStore.isSubscribed(connectionId, String(providerId));
 
-    if (!existingState || existingState === 'pending') {
+    if (!isSubscribed) {
       return c.json({ message: 'not subscribed' }, { status: 200 });
     }
 
-    await env.subscribed_accounts.delete(`${connectionId}__${providerId}`);
+    await subscriptionStore.delete(connectionId, String(providerId));
     return c.json({});
   }
 

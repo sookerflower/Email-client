@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from 'react';
+import { createContext, useContext, useState, useRef } from 'react';
 import { useConversation } from '@elevenlabs/react';
 // import { callServerTool } from '@/lib/server-tool';
 import { useSession } from '@/lib/auth-client';
@@ -19,75 +19,35 @@ interface VoiceContextType {
   sendContext: (context: any) => void;
 }
 
-// const toolNames = [
-//   'listEmails',
-//   'getEmail',
-//   'sendEmail',
-//   'markAsRead',
-//   'markAsUnread',
-//   'archiveEmails',
-//   'deleteEmails',
-//   'deleteEmail',
-//   'createLabel',
-//   'applyLabel',
-//   'removeLabel',
-//   'searchEmails',
-//   'webSearch',
-//   'summarizeEmail',
-// ] as const;
-
 const VoiceContext = createContext<VoiceContextType | undefined>(undefined);
 
 export function VoiceProvider({ children }: { children: ReactNode }) {
   const { data: session } = useSession();
   const [hasPermission, setHasPermission] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
-  const [lastToolCall, setLastToolCall] = useState<string | null>(null);
+  const [lastToolCall] = useState<string | null>(null);
   const [isOpen, setOpen] = useState(false);
   const [, setCurrentContext] = useState<any>(null);
+
+  // Local Web Speech API state fallback
+  const [localStatus, setLocalStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
+  const [localIsSpeaking, setLocalIsSpeaking] = useState(false);
+  const recognitionRef = useRef<any>(null);
 
   const conversation = useConversation({
     onConnect: () => {
       setIsInitializing(false);
-      // TODO: Send initial context if available when API supports it
     },
     onDisconnect: () => {
       setIsInitializing(false);
-      setLastToolCall(null);
     },
     onError: (error: string | Error) => {
       toast.error(typeof error === 'string' ? error : error.message);
       setIsInitializing(false);
     },
-    // clientTools: toolNames.reduce(
-    //   (acc, name) => {
-    //     acc[name] = async (params: any) => {
-    //       console.log(`[Voice Tool] ${name} called with params:`, params);
-    //       setLastToolCall(`Executing: ${name}`);
-
-    //       try {
-    //         const result = await callServerTool(
-    //           name,
-    //           { ...params, _context: currentContext },
-    //           session?.user.phoneNumber ?? session?.user.email ?? '',
-    //         );
-
-    //         console.log(`[Voice Tool] ${name} result:`, result);
-    //         setLastToolCall(null);
-    //         return result;
-    //       } catch (err) {
-    //         setLastToolCall(null);
-    //         toast.error(`Tool "${name}" failed: ${(err as Error).message}`);
-    //         throw err;
-    //       }
-    //     };
-    //     return acc;
-    //   },
-    //   {} as Record<string, (params: any) => Promise<any>>,
-    // ),
   });
 
-  const { status, isSpeaking } = conversation;
+  const agentId = import.meta.env.VITE_PUBLIC_ELEVENLABS_AGENT_ID;
 
   const requestPermission = async () => {
     try {
@@ -96,9 +56,78 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
       setHasPermission(true);
       return true;
     } catch {
-      toast.error('Microphone access denied. Please enable microphone permissions.');
+      toast.error('Microphone access denied. Please enable microphone permissions in your browser.');
       setHasPermission(false);
       return false;
+    }
+  };
+
+  const startWebSpeechRecognition = async () => {
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      toast.error('Speech recognition is not supported in your browser. Please use Chrome, Edge, or Safari.');
+      setIsInitializing(false);
+      return;
+    }
+
+    try {
+      if (recognitionRef.current) {
+        recognitionRef.current.abort();
+      }
+
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+
+      recognition.onstart = () => {
+        setIsInitializing(false);
+        setLocalStatus('connected');
+        setLocalIsSpeaking(true);
+        setOpen(true);
+        toast.success('Listening... Speak now!');
+      };
+
+      recognition.onresult = (event: any) => {
+        let finalTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          finalTranscript += event.results[i][0].transcript;
+        }
+
+        if (finalTranscript) {
+          window.dispatchEvent(
+            new CustomEvent('ai-chat-voice-input', {
+              detail: { text: finalTranscript.trim() },
+            }),
+          );
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error('[WebSpeechError]', event.error);
+        if (event.error !== 'aborted' && event.error !== 'no-speech') {
+          toast.error(`Speech recognition error: ${event.error}`);
+        }
+        setIsInitializing(false);
+        setLocalStatus('disconnected');
+        setLocalIsSpeaking(false);
+      };
+
+      recognition.onend = () => {
+        setIsInitializing(false);
+        setLocalStatus('disconnected');
+        setLocalIsSpeaking(false);
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (err: any) {
+      console.error('[StartWebSpeechError]', err);
+      toast.error('Failed to start speech recognition.');
+      setIsInitializing(false);
+      setLocalStatus('disconnected');
     }
   };
 
@@ -115,37 +144,40 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
         setCurrentContext(context);
       }
 
-      const agentId = import.meta.env.VITE_PUBLIC_ELEVENLABS_AGENT_ID;
-      if (!agentId) throw new Error('ElevenLabs Agent ID not configured');
-
-      await conversation.startSession({
-        agentId: agentId,
-        onMessage: (message) => {
-          // TODO: Handle message, ideally send it to ai chat agent or show it somewhere on the screen?
-          console.log('message', message);
-        },
-        dynamicVariables: {
-          user_name: session?.user.name.split(' ')[0] || 'User',
-          user_email: session?.user.email || '',
-          current_time: new Date().toLocaleString(),
-          has_open_email: context?.hasOpenEmail ? 'yes' : 'no',
-          current_thread_id: context?.currentThreadId || 'none',
-          email_context_info: context?.hasOpenEmail
-            ? `The user currently has an email open (thread ID: ${context.currentThreadId}). When the user refers to "this email" or "the current email", you can use the getEmail or summarizeEmail tools WITHOUT providing a threadId parameter - the tools will automatically use the currently open email.`
-            : 'No email is currently open. If the user asks about an email, you will need to ask them to open it first or provide a specific thread ID.',
-          ...context,
-        },
-      });
-
-      setOpen(true);
-    } catch {
-      toast.error('Failed to start conversation. Please try again.');
+      if (agentId) {
+        await conversation.startSession({
+          agentId: agentId,
+          dynamicVariables: {
+            user_name: session?.user.name.split(' ')[0] || 'User',
+            user_email: session?.user.email || '',
+            current_time: new Date().toLocaleString(),
+            has_open_email: context?.hasOpenEmail ? 'yes' : 'no',
+            current_thread_id: context?.currentThreadId || 'none',
+            ...context,
+          },
+        });
+        setOpen(true);
+      } else {
+        // Fallback to native Web Speech API when ElevenLabs Agent ID is not configured
+        await startWebSpeechRecognition();
+      }
+    } catch (err: any) {
+      console.warn('ElevenLabs conversation failed, falling back to Web Speech API', err);
+      await startWebSpeechRecognition();
     }
   };
 
   const endConversation = async () => {
     try {
-      await conversation.endSession();
+      if (agentId) {
+        await conversation.endSession();
+      }
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+        recognitionRef.current = null;
+      }
+      setLocalStatus('disconnected');
+      setLocalIsSpeaking(false);
       setCurrentContext(null);
     } catch {
       toast.error('Failed to end conversation');
@@ -156,10 +188,13 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
     setCurrentContext(context);
   };
 
+  const effectiveStatus = agentId ? conversation.status : localStatus;
+  const effectiveIsSpeaking = agentId ? conversation.isSpeaking : localIsSpeaking;
+
   const value: VoiceContextType = {
-    status,
+    status: effectiveStatus,
     isInitializing,
-    isSpeaking,
+    isSpeaking: effectiveIsSpeaking,
     hasPermission,
     lastToolCall,
     isOpen,

@@ -12,8 +12,8 @@
  * limitations under the License.
  */
 
+import { promptStore } from './lib/stores';
 import dedent from 'dedent';
-import { env } from './env';
 
 const showLogs = true;
 
@@ -84,9 +84,9 @@ export const getPrompt = async (
       return appendContext(appendSecurePrompt(fallback), context);
     }
 
-    const existingPrompt = await env.prompts_storage.get(promptName);
+    const existingPrompt = await promptStore.get(promptName);
     if (!existingPrompt) {
-      await env.prompts_storage.put(promptName, fallback);
+      await promptStore.set(promptName, fallback);
       return appendContext(appendSecurePrompt(fallback), context);
     }
     return appendContext(appendSecurePrompt(existingPrompt), context);
@@ -96,29 +96,5 @@ export const getPrompt = async (
       error: error instanceof Error ? error.message : String(error),
     });
     return appendContext(appendSecurePrompt(fallback), context);
-  }
-};
-
-export const getEmbeddingVector = async (text: string) => {
-  try {
-    if (!text || typeof text !== 'string' || text.trim().length === 0) {
-      log('[getEmbeddingVector] Empty or invalid text provided');
-      return null;
-    }
-
-    const embeddingResponse = await env.AI.run(
-      '@cf/baai/bge-large-en-v1.5',
-      { text: text.trim() },
-      {
-        gateway: {
-          id: 'vectorize-save',
-        },
-      },
-    );
-    const embeddingVector = (embeddingResponse as any).data?.[0];
-    return embeddingVector ?? null;
-  } catch (error) {
-    log('[getEmbeddingVector] failed', error);
-    return null;
   }
 };

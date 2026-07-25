@@ -149,30 +149,24 @@ export default function Footer() {
               </div>
               <div className="flex flex-col items-start justify-start gap-4 self-stretch">
                 <a
-                  href="https://x.com/nizzyabi/status/1918064165530550286"
+                  href="#"
                   className="w-full"
-                  target="_blank"
-                  rel="noreferrer"
                 >
                   <div className="justify-start self-stretch text-sm md:text-base leading-none text-white opacity-80 transition-opacity hover:opacity-100">
-                    Chat with Zero
+                    Chat with AxMail
                   </div>
                 </a>
                 <a
-                  href="https://x.com/nizzyabi/status/1918051282881069229"
+                  href="#"
                   className="w-full"
-                  target="_blank"
-                  rel="noreferrer"
                 >
                   <div className="justify-start self-stretch text-sm md:text-base leading-none text-white opacity-80 transition-opacity hover:opacity-100">
-                    Zero AI
+                    AxMail AI
                   </div>
                 </a>
                 <a
-                  href="https://x.com/nizzyabi/status/1919292505260249486"
+                  href="#"
                   className="w-full"
-                  target="_blank"
-                  rel="noreferrer"
                 >
                   <div className="justify-start self-stretch text-sm md:text-base leading-none text-white opacity-80 transition-opacity hover:opacity-100">
                     Shortcuts
@@ -196,9 +190,7 @@ export default function Footer() {
                   </div>
                 </a>
                 <a
-                  target="_blank"
-                  rel="noreferrer"
-                  href="https://github.com/Mail-0/Zero"
+                  href="#"
                   className="w-full"
                 >
                   <div className="justify-start self-stretch text-sm md:text-base font-normal leading-none text-white opacity-80 transition-opacity hover:opacity-100">
@@ -213,7 +205,7 @@ export default function Footer() {
         <div className="flex flex-col items-start justify-start gap-6 self-stretch">
           <div className="inline-flex items-center justify-between self-stretch flex-col-reverse md:flex-row gap-3">
             <div className="justify-start text-xs font-medium leading-tight text-white opacity-80 sm:text-sm">
-              © 2025 Zero Email Inc, All Rights Reserved
+              © 2025 AxMail Inc, All Rights Reserved
             </div>
             <div className="flex items-center gap-4">
               <Link

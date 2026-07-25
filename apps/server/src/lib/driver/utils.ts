@@ -42,24 +42,7 @@ export const findHtmlBody = (parts: any[]): string => {
   return '';
 };
 
-export class StandardizedError extends Error {
-  code: string;
-  operation: string;
-  context?: Record<string, unknown>;
-  originalError: unknown;
-  constructor(
-    error: Error & { code: string },
-    operation: string,
-    context?: Record<string, unknown>,
-  ) {
-    super(error?.message || 'An unknown error occurred');
-    this.name = 'StandardizedError';
-    this.code = error?.code || 'UNKNOWN_ERROR';
-    this.operation = operation;
-    this.context = context;
-    this.originalError = error;
-  }
-}
+export { StandardizedError } from './standardized-error';
 
 export function sanitizeContext(context?: Record<string, unknown>) {
   if (!context) return undefined;

@@ -10,6 +10,7 @@ import {
 import { createAuthMiddleware, phoneNumber, jwt, bearer, mcp } from 'better-auth/plugins';
 import { type Account, betterAuth, type BetterAuthOptions } from 'better-auth';
 import { getBrowserTimezone, isValidTimezone } from './timezones';
+import { imapAuthPlugin } from './auth-imap-plugin';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { getZeroDB, resetConnection } from './server-utils';
 import { getSocialProviders } from './auth-providers';
@@ -20,7 +21,6 @@ import { disableBrainFunction } from './brain';
 import { APIError } from 'better-auth/api';
 import { type EProviders } from '../types';
 import { createDriver } from './driver';
-import { Autumn } from 'autumn-js';
 import { createDb } from '../db';
 import { Effect } from 'effect';
 import { env } from '../env';
@@ -35,7 +35,7 @@ const scheduleCampaign = (userInfo: { address: string; name: string }) =>
       Effect.promise(() =>
         resendService.emails
           .send({
-            from: '0.email <onboarding@0.email>',
+            from: 'AxMail <onboarding@axmail.dev>',
             to: userInfo.address,
             subject,
             react: react as any,
@@ -46,12 +46,12 @@ const scheduleCampaign = (userInfo: { address: string; name: string }) =>
 
     const emails = [
       {
-        subject: 'Welcome to 0.email',
+        subject: 'Welcome to AxMail',
         react: WelcomeEmail({ name }),
         scheduledAt: undefined,
       },
       {
-        subject: 'Mail0 Pro is here 🚀💼',
+        subject: 'AxMail Pro is here 🚀💼',
         react: Mail0ProEmail({ name }),
         scheduledAt: 'in 1 day',
       },
@@ -183,6 +183,7 @@ export const createAuth = () => {
             });
         },
       }),
+      imapAuthPlugin(),
     ],
     user: {
       deleteUser: {
@@ -191,11 +192,11 @@ export const createAuth = () => {
           const verificationUrl = data.url;
 
           await resend().emails.send({
-            from: '0.email <no-reply@0.email>',
+            from: 'AxMail <no-reply@axmail.dev>',
             to: data.user.email,
-            subject: 'Delete your 0.email account',
+            subject: 'Delete your AxMail account',
             html: `
-            <h2>Delete Your 0.email Account</h2>
+            <h2>Delete Your AxMail Account</h2>
             <p>Click the link below to delete your account:</p>
             <a href="${verificationUrl}">${verificationUrl}</a>
           `,
@@ -205,13 +206,6 @@ export const createAuth = () => {
           if (!request) throw new APIError('BAD_REQUEST', { message: 'Request object is missing' });
           const db = await getZeroDB(user.id);
           const connections = await db.findManyConnections();
-          const autumn = new Autumn({ secretKey: env.AUTUMN_SECRET_KEY });
-          try {
-            await autumn.customers.delete(user.id);
-          } catch (error) {
-            console.error('Failed to delete Autumn customer:', error);
-            // Continue with deletion process despite Autumn failure
-          }
 
           const revokedAccounts = (
             await Promise.allSettled(
@@ -263,7 +257,7 @@ export const createAuth = () => {
       requireEmailVerification: true,
       sendResetPassword: async ({ user, url }) => {
         await resend().emails.send({
-          from: '0.email <onboarding@0.email>',
+          from: 'AxMail <onboarding@axmail.dev>',
           to: user.email,
           subject: 'Reset your password',
           html: `
@@ -282,11 +276,11 @@ export const createAuth = () => {
         const verificationUrl = `${env.VITE_PUBLIC_APP_URL}/api/auth/verify-email?token=${token}&callbackURL=/settings/connections`;
 
         await resend().emails.send({
-          from: '0.email <onboarding@0.email>',
+          from: 'AxMail <onboarding@axmail.dev>',
           to: user.email,
-          subject: 'Verify your 0.email account',
+          subject: 'Verify your AxMail account',
           html: `
-            <h2>Verify Your 0.email Account</h2>
+            <h2>Verify Your AxMail Account</h2>
             <p>Click the link below to verify your email:</p>
             <a href="${verificationUrl}">${verificationUrl}</a>
           `,
@@ -349,10 +343,18 @@ const createAuthConfig = () => {
         disableIpTracking: true,
       },
       cookiePrefix: env.NODE_ENV === 'development' ? 'better-auth-dev' : 'better-auth',
-      crossSubDomainCookies: {
-        enabled: true,
-        domain: env.COOKIE_DOMAIN,
-      },
+      ...(env.COOKIE_DOMAIN && env.COOKIE_DOMAIN !== 'localhost'
+        ? {
+            crossSubDomainCookies: {
+              enabled: true,
+              domain: env.COOKIE_DOMAIN,
+            },
+          }
+        : {
+            crossSubDomainCookies: {
+              enabled: false,
+            },
+          }),
     },
     baseURL: env.VITE_PUBLIC_BACKEND_URL,
     trustedOrigins: [

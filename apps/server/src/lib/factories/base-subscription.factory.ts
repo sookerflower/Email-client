@@ -1,3 +1,4 @@
+import { labelConfigStore } from '../stores';
 import { defaultLabels, EProviders, } from '../../types';
 
 import { connection } from '../../db/schema';
@@ -38,9 +39,6 @@ export abstract class BaseSubscriptionFactory {
   }
 
   protected async initializeConnectionLabels(connectionId: string): Promise<void> {
-    const existingLabels = await env.connection_labels.get(connectionId);
-    if (!existingLabels?.trim().length) {
-      await env.connection_labels.put(connectionId, JSON.stringify(defaultLabels));
-    }
+    await labelConfigStore.seedIfMissing(connectionId, defaultLabels);
   }
 }

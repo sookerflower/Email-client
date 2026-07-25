@@ -4,6 +4,7 @@ import {
   timestamp,
   boolean,
   integer,
+  bigint,
   jsonb,
   primaryKey,
   unique,
@@ -128,10 +129,22 @@ export const connection = createTable(
     accessToken: text('access_token'),
     refreshToken: text('refresh_token'),
     scope: text('scope').notNull(),
-    providerId: text('provider_id').$type<'google' | 'microsoft'>().notNull(),
+    providerId: text('provider_id').$type<'google' | 'microsoft' | 'imap'>().notNull(),
     expiresAt: timestamp('expires_at').notNull(),
     createdAt: timestamp('created_at').notNull(),
     updatedAt: timestamp('updated_at').notNull(),
+    // IMAP/SMTP provider only ('imap') — null for OAuth providers.
+    imapHost: text('imap_host'),
+    imapPort: integer('imap_port'),
+    imapSecure: boolean('imap_secure'),
+    smtpHost: text('smtp_host'),
+    smtpPort: integer('smtp_port'),
+    smtpSecure: boolean('smtp_secure'),
+    username: text('username'),
+    // Ciphertext only — plaintext password must never be written to this column.
+    passwordEncrypted: text('password_encrypted'),
+    // Opt-in: accept self-signed/unverifiable TLS certs for this connection.
+    imapAllowInsecureTls: boolean('imap_allow_insecure_tls'),
   },
   (t) => [
     unique().on(t.userId, t.email),
@@ -321,4 +334,209 @@ export const emailTemplate = createTable(
     index('idx_mail0_email_template_user_id').on(t.userId),
     unique('mail0_email_template_user_id_name_unique').on(t.userId, t.name),
   ],
+);
+
+// ---------------------------------------------------------------------------
+// Phase 1 migration tables (MIGRATION-PLAN.md §1): replacements for the
+// DO-SQLite thread index (ZeroDriver), durable KV namespaces, scheduled-send
+// KV machinery, ZeroAgent chat storage, and groundwork for incremental sync.
+// Written now, consumed by later phases.
+// ---------------------------------------------------------------------------
+
+/** Per-connection thread index (replaces DO-SQLite `threads` across shards). */
+export const thread = createTable(
+  'thread',
+  {
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connection.id, { onDelete: 'cascade' }),
+    threadId: text('thread_id').notNull(),
+    providerId: text('provider_id'),
+    latestSender: jsonb('latest_sender'),
+    latestReceivedOn: timestamp('latest_received_on'),
+    latestSubject: text('latest_subject'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.connectionId, t.threadId] }),
+    index('thread_conn_received_idx').on(t.connectionId, t.latestReceivedOn),
+  ],
+);
+
+/** Per-connection labels (replaces DO-SQLite `labels`). */
+export const label = createTable(
+  'label',
+  {
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connection.id, { onDelete: 'cascade' }),
+    id: text('id').notNull(),
+    name: text('name').notNull(),
+    color: text('color'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.connectionId, t.id] }),
+    index('label_conn_name_idx').on(t.connectionId, t.name),
+  ],
+);
+
+/** Thread<->label join (replaces DO-SQLite `thread_labels`). */
+export const threadLabel = createTable(
+  'thread_label',
+  {
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connection.id, { onDelete: 'cascade' }),
+    threadId: text('thread_id').notNull(),
+    labelId: text('label_id').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.connectionId, t.threadId, t.labelId] }),
+    index('thread_label_conn_label_idx').on(t.connectionId, t.labelId),
+  ],
+);
+
+/**
+ * Scheduled/undo-send outbox (replaces KV pending_emails_status,
+ * pending_emails_payload, scheduled_emails). Source of truth for a send;
+ * the BullMQ delayed job is just the timer.
+ */
+export const outbox = createTable(
+  'outbox',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connection.id, { onDelete: 'cascade' }),
+    payload: jsonb('payload').notNull(),
+    status: text('status').notNull().default('pending'), // pending|cancelled|sent|failed
+    sendAt: timestamp('send_at').notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    index('outbox_status_send_at_idx').on(t.status, t.sendAt),
+    index('outbox_connection_id_idx').on(t.connectionId),
+  ],
+);
+
+/** Thread snoozes (replaces KV snoozed_emails; wake handled by sweep job). */
+export const snooze = createTable(
+  'snooze',
+  {
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connection.id, { onDelete: 'cascade' }),
+    threadId: text('thread_id').notNull(),
+    wakeAt: timestamp('wake_at').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.connectionId, t.threadId] }),
+    index('snooze_wake_at_idx').on(t.wakeAt),
+  ],
+);
+
+/** AI auto-labeling config (replaces KV connection_labels; user config). */
+export const connectionLabelConfig = createTable('connection_label_config', {
+  connectionId: text('connection_id')
+    .primaryKey()
+    .references(() => connection.id, { onDelete: 'cascade' }),
+  labels: jsonb('labels').notNull(), // [{ name, usecase }]
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+/** Per-connection AI prompt overrides (replaces KV prompts_storage). */
+export const promptOverride = createTable(
+  'prompt_override',
+  {
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connection.id, { onDelete: 'cascade' }),
+    promptType: text('prompt_type').notNull(),
+    content: text('content').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.connectionId, t.promptType] })],
+);
+
+/**
+ * Provider push-subscription state + incremental-sync cursor (replaces KV
+ * subscribed_accounts, gmail_sub_age, gmail_history_id). Gmail-only today;
+ * dormant until the Gmail push pipeline is ported.
+ */
+export const providerSubscription = createTable(
+  'provider_subscription',
+  {
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connection.id, { onDelete: 'cascade' }),
+    providerId: text('provider_id').notNull(),
+    status: text('status').notNull().default('pending'), // pending|active
+    subscribedAt: timestamp('subscribed_at'),
+    historyId: text('history_id'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.connectionId, t.providerId] })],
+);
+
+/** AI chat history (replaces ZeroAgent's DO-SQLite cf_ai_chat_agent_messages). */
+export const chatMessage = createTable(
+  'chat_message',
+  {
+    id: text('id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connection.id, { onDelete: 'cascade' }),
+    message: jsonb('message').notNull(), // AI SDK Message shape
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (t) => [index('chat_message_conn_created_idx').on(t.connectionId, t.createdAt)],
+);
+
+/**
+ * IMAP label registry (Phase 3.2 of MIGRATION-PLAN.md): backing store for the
+ * driver's `$zl_` keyword-label registry, previously the sidecar's
+ * .label-store.json file. Opaque key -> JSON string, keys shaped
+ * `imap-labels:{userId}:{email}` by the driver.
+ */
+export const imapLabelRegistry = createTable('imap_label_registry', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+/**
+ * Per-folder IMAP sync state (RFC 7162 groundwork; MIGRATION-PLAN.md §9).
+ * uidValidity/uidNext are 32-bit unsigned; highestModseq is 63-bit so it is
+ * stored as text to avoid JS number-precision loss. pageToken checkpoints the
+ * sync job so a retry resumes instead of restarting.
+ */
+export const folderSyncState = createTable(
+  'folder_sync_state',
+  {
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connection.id, { onDelete: 'cascade' }),
+    folder: text('folder').notNull(),
+    uidValidity: bigint('uid_validity', { mode: 'number' }),
+    uidNext: bigint('uid_next', { mode: 'number' }),
+    highestModseq: text('highest_modseq'),
+    pageToken: text('page_token'),
+    lastSyncedAt: timestamp('last_synced_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.connectionId, t.folder] })],
 );

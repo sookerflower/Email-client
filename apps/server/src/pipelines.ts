@@ -11,6 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { subscriptionStore, acquireProcessingLock } from './lib/stores';
 import {
   createDefaultWorkflows,
   type WorkflowContext,
@@ -18,7 +19,7 @@ import {
 import { getServiceAccount } from './lib/factories/google-subscription.factory';
 import { getThread, getZeroAgent } from './lib/server-utils';
 import { DurableObject } from 'cloudflare:workers';
-import { bulkDeleteKeys } from './lib/bulk-delete';
+import { releaseProcessingKeys as bulkDeleteKeys } from './lib/stores';
 import { type gmail_v1 } from '@googleapis/gmail';
 import { Effect, Console, Logger } from 'effect';
 import { connection } from './db/schema';
@@ -170,7 +171,7 @@ export class WorkflowRunner extends DurableObject<ZeroEnv> {
       }
 
       const previousHistoryId = yield* Effect.tryPromise({
-        try: () => this.env.gmail_history_id.get(connectionId),
+        try: () => subscriptionStore.getHistoryId(connectionId),
         catch: () => ({
           _tag: 'WorkflowCreationFailed' as const,
           error: 'Failed to get history ID',
@@ -229,18 +230,12 @@ export class WorkflowRunner extends DurableObject<ZeroEnv> {
       const historyProcessingKey = `history_${connectionId}__${historyId}`;
       const keysToDelete: string[] = [];
 
-      // Atomic lock acquisition to prevent race conditions
+      // Atomic lock acquisition to prevent race conditions. Redis SET NX EX is
+      // a real test-and-set (the old KV `put` never was — KV puts
+      // unconditionally overwrite, so the "null means existed" check was
+      // ineffective).
       const lockAcquired = yield* Effect.tryPromise({
-        try: async () => {
-          const response = await this.env.gmail_processing_threads.put(
-            historyProcessingKey,
-            'true',
-            {
-              expirationTtl: 3600,
-            },
-          );
-          return response !== null; // null means key already existed
-        },
+        try: () => acquireProcessingLock(historyProcessingKey, 3600),
         catch: (error) => ({ _tag: 'WorkflowCreationFailed' as const, error }),
       });
 
@@ -314,7 +309,7 @@ export class WorkflowRunner extends DurableObject<ZeroEnv> {
         yield* Effect.tryPromise({
           try: () => {
             console.log('[ZERO_WORKFLOW] Updating next history ID:', nextHistoryId);
-            return this.env.gmail_history_id.put(connectionId.toString(), nextHistoryId.toString());
+            return subscriptionStore.setHistoryId(connectionId.toString(), nextHistoryId.toString());
           },
           catch: (error) => ({ _tag: 'WorkflowCreationFailed' as const, error }),
         });

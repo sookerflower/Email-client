@@ -14,6 +14,7 @@ import {
   type IGetThreadsResponse,
 } from '../../lib/driver/types';
 import { updateWritingStyleMatrix } from '../../services/writing-style-service';
+import { snoozeStore, outboxStore, checkAndSetCooldown } from '../../lib/stores';
 import type { DeleteAllSpamResponse, IEmailSendBatch } from '../../types';
 import { activeDriverProcedure, router, privateProcedure } from '../trpc';
 import { processEmailHtml } from '../../lib/email-processor';
@@ -134,27 +135,25 @@ export const mailRouter = router({
 
         await Promise.all(
           threadsResponse.threads.map(async (t: ThreadItem) => {
-            const keyName = `${t.id}__${activeConnection.id}`;
             try {
-              const wakeAtIso = await env.snoozed_emails.get(keyName);
-              if (!wakeAtIso) {
+              const wakeAt = await snoozeStore.getWakeAt(activeConnection.id, t.id);
+              if (!wakeAt) {
                 filtered.push(t);
                 return;
               }
 
-              const wakeAt = new Date(wakeAtIso).getTime();
-              if (wakeAt > nowTs) {
+              if (wakeAt.getTime() > nowTs) {
                 filtered.push(t);
                 return;
               }
 
               console.debug('[UNSNOOZE_ON_ACCESS] Expired thread', t.id, {
-                wakeAtIso,
+                wakeAt: wakeAt.toISOString(),
                 now: new Date(nowTs).toISOString(),
               });
 
               await modifyThreadLabelsInDB(activeConnection.id, t.id, ['INBOX'], ['SNOOZED']);
-              await env.snoozed_emails.delete(keyName);
+              await snoozeStore.delete(activeConnection.id, [t.id]);
             } catch (error) {
               console.error('[UNSNOOZE_ON_ACCESS] Failed for', t.id, error);
               filtered.push(t);
@@ -167,17 +166,10 @@ export const mailRouter = router({
       }
 
       if (threadsResponse.threads.length === 0 && folder === FOLDERS.INBOX && !q) {
-        const now = Date.now();
-        const cooldownKey = `resync_cooldown_${activeConnection.id}`;
-        const lastResyncStr = await env.gmail_processing_threads.get(cooldownKey);
-        const lastResync = lastResyncStr ? parseInt(lastResyncStr, 10) : 0;
-        const RESYNC_COOLDOWN_MS = 30000;
+        // 30s resync cooldown, armed atomically in Redis (was a KV get/put pair).
+        const shouldResync = await checkAndSetCooldown(`resync_${activeConnection.id}`, 30);
 
-        if (now - lastResync > RESYNC_COOLDOWN_MS) {
-          await env.gmail_processing_threads.put(cooldownKey, now.toString(), {
-            expirationTtl: 60,
-          });
-
+        if (shouldResync) {
           getZeroAgent(activeConnection.id, executionCtx)
             .then((_agent) => {
               _agent.stub.forceReSync().catch((error) => {
@@ -522,22 +514,6 @@ export const mailRouter = router({
         const maxQueueDelay = 43200; // 12 hours
         const isLongTerm = rawDelaySeconds > maxQueueDelay;
 
-        const {
-          pending_emails_status: statusKV,
-          pending_emails_payload: payloadKV,
-          scheduled_emails: scheduledKV,
-          send_email_queue,
-        } = env;
-
-        try {
-          await statusKV.put(messageId, 'pending', {
-            expirationTtl: 60 * 60 * 24,
-          });
-        } catch (error) {
-          console.error(`Failed to write pending status to KV for message ${messageId}`, error);
-          return { success: false, error: 'Failed to schedule email status' } as const;
-        }
-
         const mailPayload = {
           ...mail,
           draftId,
@@ -545,42 +521,32 @@ export const mailRouter = router({
           connectionId: activeConnection.id,
         };
 
+        // Postgres outbox row is the source of truth for the send (replaces
+        // the pending_emails_status/payload + scheduled_emails KV trio); the
+        // queue message is only the delivery timer.
         try {
-          await payloadKV.put(messageId, JSON.stringify(mailPayload), {
-            expirationTtl: 60 * 60 * 24,
+          await outboxStore.create({
+            id: messageId,
+            userId: sessionUser.id,
+            connectionId: activeConnection.id,
+            payload: mailPayload,
+            sendAt: new Date(targetTime),
           });
         } catch (error) {
-          console.error(`Failed to write email payload to KV for message ${messageId}`, error);
-          return { success: false, error: 'Failed to schedule email payload' } as const;
+          console.error(`Failed to create outbox row for message ${messageId}`, error);
+          return { success: false, error: 'Failed to schedule email' } as const;
         }
 
-        if (isLongTerm) {
-          try {
-            await scheduledKV.put(
-              messageId,
-              JSON.stringify({
-                messageId,
-                connectionId: activeConnection.id,
-                sendAt: targetTime,
-              }),
-              { expirationTtl: Math.min(Math.ceil(rawDelaySeconds + 3600), 31556952) },
-            );
-          } catch (error) {
-            console.error(
-              `Failed to write long-term schedule to KV for message ${messageId}`,
-              error,
-            );
-            return { success: false, error: 'Failed to schedule email (long-term)' } as const;
-          }
-        } else {
-          const delaySeconds = rawDelaySeconds;
+        if (!isLongTerm) {
+          // Long-term sends stay 'pending' until the hourly promotion sweep.
           const queueBody: IEmailSendBatch = {
             messageId,
             connectionId: activeConnection.id,
             sendAt: targetTime,
           };
           try {
-            await send_email_queue.send(queueBody, { delaySeconds });
+            await env.send_email_queue.send(queueBody, { delaySeconds: rawDelaySeconds });
+            await outboxStore.markQueued(messageId);
           } catch (error) {
             console.error(`Failed to enqueue email send for message ${messageId}`, error);
             return { success: false, error: 'Failed to enqueue email send' } as const;
@@ -625,50 +591,22 @@ export const mailRouter = router({
     .mutation(async ({ input, ctx }) => {
       const { messageId } = input;
       const { activeConnection } = ctx;
-      const {
-        pending_emails_status: statusKV,
-        pending_emails_payload: payloadKV,
-        scheduled_emails: scheduledKV,
-      } = env;
 
-      const scheduledData = await scheduledKV.get(messageId);
-      if (scheduledData) {
-        try {
-          const { connectionId } = JSON.parse(scheduledData);
-          if (connectionId !== activeConnection.id) {
-            return {
-              success: false,
-              error: "Unauthorized: Cannot cancel another user's scheduled email",
-            } as const;
-          }
-        } catch (error) {
-          console.error('Failed to parse scheduled data for ownership verification:', error);
-          return { success: false, error: 'Invalid scheduled email data' } as const;
-        }
+      const row = await outboxStore.getById(messageId);
+      if (!row) {
+        return { success: false, error: 'Scheduled email not found' } as const;
+      }
+      if (row.connectionId !== activeConnection.id) {
+        return {
+          success: false,
+          error: "Unauthorized: Cannot cancel another user's scheduled email",
+        } as const;
       }
 
-      const payloadData = await payloadKV.get(messageId);
-      if (payloadData) {
-        try {
-          const payload = JSON.parse(payloadData);
-          if (payload.connectionId && payload.connectionId !== activeConnection.id) {
-            return {
-              success: false,
-              error: "Unauthorized: Cannot cancel another user's queued email",
-            } as const;
-          }
-        } catch (error) {
-          console.error('Failed to parse payload data:', error);
-          return { success: false, error: 'Invalid payload data' } as const;
-        }
+      const cancelled = await outboxStore.cancel(messageId);
+      if (!cancelled) {
+        return { success: false, error: 'Email was already sent' } as const;
       }
-
-      await statusKV.put(messageId, 'cancelled', {
-        expirationTtl: 60 * 60,
-      });
-
-      await payloadKV.delete(messageId);
-      await scheduledKV.delete(messageId); // Clean up long-term schedule if it exists
 
       return { success: true };
     }),
@@ -681,8 +619,8 @@ export const mailRouter = router({
     .mutation(async ({ input, ctx }) => {
       const { activeConnection } = ctx;
       const executionCtx = getContext<HonoContext>().executionCtx;
-      const { exec, stub } = await getZeroAgent(activeConnection.id, executionCtx);
-      exec(`DELETE FROM threads WHERE thread_id = ?`, input.id);
+      const { stub } = await getZeroAgent(activeConnection.id, executionCtx);
+      await stub.deleteThread(input.id);
       await stub.reloadFolder('bin');
       return true;
     }),
@@ -758,14 +696,7 @@ export const mailRouter = router({
         ),
       );
 
-      const wakeAtIso = wakeAtDate.toISOString();
-      await Promise.all(
-        input.ids.map((threadId) =>
-          env.snoozed_emails.put(`${threadId}__${activeConnection.id}`, wakeAtIso, {
-            metadata: { wakeAt: wakeAtIso },
-          }),
-        ),
-      );
+      await snoozeStore.set(activeConnection.id, input.ids, wakeAtDate);
 
       return { success: true };
     }),
@@ -783,11 +714,7 @@ export const mailRouter = router({
           modifyThreadLabelsInDB(activeConnection.id, threadId, ['INBOX'], ['SNOOZED']),
         ),
       );
-      await Promise.all(
-        input.ids.map((threadId) =>
-          env.snoozed_emails.delete(`${threadId}__${activeConnection.id}`),
-        ),
-      );
+      await snoozeStore.delete(activeConnection.id, input.ids);
       return { success: true };
     }),
   getMessageAttachments: activeDriverProcedure

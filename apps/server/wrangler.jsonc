@@ -13,19 +13,13 @@
           "fallthrough": true,
         },
       ],
-      "ai": {
-        "binding": "AI",
-      },
-      "vectorize": [
-        {
-          "binding": "VECTORIZE",
-          "index_name": "threads-vector-staging",
-        },
-        {
-          "binding": "VECTORIZE_MESSAGE",
-          "index_name": "messages-vector-staging",
-        },
-      ],
+      // Workers AI has no local simulator; wrangler >=4.1xx eagerly opens a
+      // remote (Cloudflare-authenticated) session for it at startup, which
+      // this credential-less local/self-hosted setup can't do. AI features
+      // route through the OpenAI-compatible endpoint (USE_OPENAI) instead.
+      // "ai": {
+      //   "binding": "AI",
+      // },
       "r2_buckets": [
         {
           "binding": "THREADS_BUCKET",
@@ -179,52 +173,7 @@
         "MEET_AUTH_HEADER": "",
         "OTEL_EXPORTER_OTLP_ENDPOINT": "https://api.axiom.co/v1/traces",
         "OTEL_SERVICE_NAME": "zero-email-server-local",
-        "DD_API_KEY": "",
-        "DD_APP_KEY": "",
-        "DD_SITE": "datadoghq.com",
       },
-      "kv_namespaces": [
-        {
-          "binding": "gmail_history_id",
-          "id": "4e814c70e35d413d99c923029928efae",
-        },
-        {
-          "binding": "gmail_processing_threads",
-          "id": "b7db3a98a80f4e16a8b6edc5fa8c7b76",
-        },
-        {
-          "binding": "subscribed_accounts",
-          "id": "7e6eadacf19c4c56a9ec3c357adb584a",
-        },
-        {
-          "binding": "connection_labels",
-          "id": "4d3a28d3265a4388aae2e9e9b534d019",
-        },
-        {
-          "binding": "prompts_storage",
-          "id": "620e710aaea744e59df4788f9ec18ff9",
-        },
-        {
-          "binding": "gmail_sub_age",
-          "id": "c55e692bb71d4e5bae23dded092b09d5",
-        },
-        {
-          "binding": "pending_emails_status",
-          "id": "7f277903ebab4b4d89f5d59b1f531073",
-        },
-        {
-          "binding": "pending_emails_payload",
-          "id": "d5da698931524da9992fe398e095fc32",
-        },
-        {
-          "binding": "scheduled_emails",
-          "id": "444cad0e54114635b5199ffae9542bd5",
-        },
-        {
-          "binding": "snoozed_emails",
-          "id": "f3a30ed7198542d890db172536bade33",
-        },
-      ],
     },
     "staging": {
       "rules": [
@@ -240,16 +189,6 @@
       "ai": {
         "binding": "AI",
       },
-      "vectorize": [
-        {
-          "binding": "VECTORIZE",
-          "index_name": "threads-vector-staging",
-        },
-        {
-          "binding": "VECTORIZE_MESSAGE",
-          "index_name": "messages-vector-staging",
-        },
-      ],
       "limits": {
         "cpu_ms": 300000,
       },
@@ -400,52 +339,7 @@
         "DISABLE_WORKFLOWS": "false",
         "OTEL_EXPORTER_OTLP_ENDPOINT": "https://api.axiom.co/v1/traces",
         "OTEL_SERVICE_NAME": "zero-email-server-staging",
-        "DD_API_KEY": "",
-        "DD_APP_KEY": "",
-        "DD_SITE": "datadoghq.com",
       },
-      "kv_namespaces": [
-        {
-          "binding": "gmail_history_id",
-          "id": "4e814c70e35d413d99c923029928efae",
-        },
-        {
-          "binding": "gmail_processing_threads",
-          "id": "b7db3a98a80f4e16a8b6edc5fa8c7b76",
-        },
-        {
-          "binding": "subscribed_accounts",
-          "id": "7e6eadacf19c4c56a9ec3c357adb584a",
-        },
-        {
-          "binding": "connection_labels",
-          "id": "4d3a28d3265a4388aae2e9e9b534d019",
-        },
-        {
-          "binding": "prompts_storage",
-          "id": "620e710aaea744e59df4788f9ec18ff9",
-        },
-        {
-          "binding": "gmail_sub_age",
-          "id": "c55e692bb71d4e5bae23dded092b09d5",
-        },
-        {
-          "binding": "pending_emails_status",
-          "id": "7f277903ebab4b4d89f5d59b1f531073",
-        },
-        {
-          "binding": "pending_emails_payload",
-          "id": "d5da698931524da9992fe398e095fc32",
-        },
-        {
-          "binding": "scheduled_emails",
-          "id": "444cad0e54114635b5199ffae9542bd5",
-        },
-        {
-          "binding": "snoozed_emails",
-          "id": "f3a30ed7198542d890db172536bade33",
-        },
-      ],
     },
     "production": {
       "rules": [
@@ -467,16 +361,6 @@
       "ai": {
         "binding": "AI",
       },
-      "vectorize": [
-        {
-          "binding": "VECTORIZE",
-          "index_name": "threads-vector",
-        },
-        {
-          "binding": "VECTORIZE_MESSAGE",
-          "index_name": "messages-vector",
-        },
-      ],
       "observability": {
         "enabled": true,
       },
@@ -618,52 +502,7 @@
         "DISABLE_WORKFLOWS": "true",
         "OTEL_EXPORTER_OTLP_ENDPOINT": "https://api.axiom.co/v1/traces",
         "OTEL_SERVICE_NAME": "zero-email-server-production",
-        "DD_API_KEY": "",
-        "DD_APP_KEY": "",
-        "DD_SITE": "datadoghq.com",
       },
-      "kv_namespaces": [
-        {
-          "binding": "gmail_history_id",
-          "id": "10005d74e84f4f18a17c9618d9e9cecf",
-        },
-        {
-          "binding": "gmail_processing_threads",
-          "id": "3348ff0976284269a8d8a5e6e4c04c56",
-        },
-        {
-          "binding": "subscribed_accounts",
-          "id": "5902b3b948ff4c4ba1aedbbbbe25503d",
-        },
-        {
-          "binding": "connection_labels",
-          "id": "9a13290a55ad4f62824c67005dd66f6f",
-        },
-        {
-          "binding": "prompts_storage",
-          "id": "2a4ebda553f3456085cfcf92cc0f570f",
-        },
-        {
-          "binding": "gmail_sub_age",
-          "id": "0591e91fffcc4675aaf00f909bee77d2",
-        },
-        {
-          "binding": "pending_emails_status",
-          "id": "e65f8f72441d4eadb9d5ae36269316c9",
-        },
-        {
-          "binding": "pending_emails_payload",
-          "id": "e65f8f72441d4eadb9d5ae36269316c9_payload",
-        },
-        {
-          "binding": "scheduled_emails",
-          "id": "e65f8f72441d4eadb9d5ae36269316c9_scheduled",
-        },
-        {
-          "binding": "snoozed_emails",
-          "id": "f0952e9c3b024cb499c4b9dfe8bb603e",
-        },
-      ],
     },
   },
 }

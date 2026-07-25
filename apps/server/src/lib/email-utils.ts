@@ -1,5 +1,9 @@
-import { parseFrom as _parseFrom, parseAddressList as _parseAddressList } from 'email-addresses';
+// Default-import + destructure: `email-addresses` is CJS; native Node ESM
+// can't statically detect its named exports (workerd's bundler could).
+import emailAddresses from 'email-addresses';
 import type { Sender } from '../types';
+
+const { parseFrom: _parseFrom, parseAddressList: _parseAddressList } = emailAddresses;
 
 type ListUnsubscribeAction =
   | { type: 'get'; url: string; host: string }

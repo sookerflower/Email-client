@@ -94,9 +94,8 @@ export default function HomeContent() {
           transition={{ duration: 0.5, delay: 0.4 }}
           className="mx-auto mb-4 max-w-2xl text-center text-base font-medium text-[#B7B7B7] md:text-lg"
         >
-          Zero is an AI-native email client that manages your inbox, so you don't have to.
+          AxMail is an AI-native email client that manages your inbox, so you don't have to.
         </motion.p>
-        <p className="mb-4 ml-0.5 text-xs text-[#B7B7B7]/60">No credit card required.</p>
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -170,7 +169,7 @@ export default function HomeContent() {
                 <TabsContent key={tab.value} value={tab.value}>
                   <img
                     src="/email-preview.png"
-                    alt="Zero Email Preview"
+                    alt="AxMail Email Preview"
                     width={1920}
                     height={1080}
                     className="relative hidden md:block"
@@ -186,7 +185,7 @@ export default function HomeContent() {
       <div className="flex items-center justify-center px-4 md:hidden">
         <img
           src="/email-preview.png"
-          alt="Zero Email Preview"
+          alt="AxMail Email Preview"
           width={1920}
           height={1080}
           className="mt-10 h-fit w-full rounded-xl border"
@@ -1258,7 +1257,7 @@ export default function HomeContent() {
                     <div className="flex h-8 flex-1 items-center justify-start gap-1.5 overflow-hidden rounded-md bg-[#141414] pl-2.5 pr-1">
                       <div className="relative h-3 w-px rounded-full bg-white" />
                       <div className="flex-1 justify-start text-sm leading-none text-[#727272]">
-                        Ask Zero to do anything...
+                        Ask AxMail to do anything...
                       </div>
                       <div className="flex h-6 items-center justify-center gap-2.5 rounded bg-[#262626] px-1">
                         <CurvedArrow className="relative left-px mt-1 h-4 w-4 fill-black dark:fill-[#929292]" />

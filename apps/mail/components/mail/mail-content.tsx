@@ -80,8 +80,8 @@ export function MailContent({ id, html, senderEmail }: MailContentProps) {
         hasBlockedImages: result.hasBlockedImages,
       };
     },
-    staleTime: 30 * 60 * 1000,
-    gcTime: 60 * 60 * 1000,
+    staleTime: 0,
+    gcTime: 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnMount: false,
   });

@@ -1,6 +1,5 @@
 import {
   BookDashedIcon,
-  GitBranchPlus,
   MessageSquareIcon,
   RefreshCcwDotIcon,
   SendIcon,
@@ -14,7 +13,6 @@ import {
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -30,7 +28,6 @@ import { Button } from '@/components/ui/button';
 import { useForm } from 'react-hook-form';
 import { Paper } from '../icons/icons';
 import { Textarea } from './textarea';
-import { Link } from 'react-router';
 import { useMemo } from 'react';
 import { toast } from 'sonner';
 
@@ -135,19 +132,8 @@ export function PromptsDialog() {
         <DialogContent className="max-w-(--breakpoint-lg)" showOverlay={true}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              ZeroAI System Prompts{' '}
-              <Link
-                to={'https://github.com/Mail-0/Zero.git'}
-                target="_blank"
-                className="flex items-center gap-1 text-xs underline"
-              >
-                <span>Contribute</span>
-                <GitBranchPlus className="h-4 w-4" />
-              </Link>
+              AxMail AI System Prompts
             </DialogTitle>
-            <DialogDescription>
-              We believe in Open Source, so we're open sourcing our AI system prompts.
-            </DialogDescription>
           </DialogHeader>
           <Tabs className="mt-2">
             <TabsList className="w-full justify-start">

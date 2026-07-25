@@ -1,10 +1,12 @@
 import type { MailManager, ManagerConfig } from './types';
+import { ImapSmtpProxyMailManager } from './imap-proxy';
 import { OutlookMailManager } from './microsoft';
 import { GoogleMailManager } from './google';
 
 const supportedProviders = {
   google: GoogleMailManager,
   microsoft: OutlookMailManager,
+  imap: ImapSmtpProxyMailManager,
 };
 
 export const createDriver = (

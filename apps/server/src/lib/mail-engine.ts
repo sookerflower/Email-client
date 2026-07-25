@@ -1,0 +1,626 @@
+import {
+  clearIndex,
+  countIndexedThreads,
+  countThreadsByLabels,
+  deleteIndexedThread,
+  deleteSpamThreads,
+  findThreads,
+  getAllSubjects,
+  getIndexedThread,
+  getRecentSenders,
+  getThreadLabels,
+  modifyThreadLabels,
+  upsertThread,
+  type IndexLabel,
+} from './mail-index';
+import type { IGetThreadResponse, IGetThreadsResponse, MailManager } from './driver/types';
+import type { ParsedMessage } from '../types';
+import { getThreadBlobStore, threadBlobKey } from './blob-store';
+import { OutgoingMessageType } from '../routes/agent/types';
+import type { connection as connectionSchema } from '../db/schema';
+import type { CreateDraftData } from './schemas';
+import { snoozeStore } from './stores';
+import { createDb } from '../db';
+import { env } from '../env';
+
+type ConnectionRow = typeof connectionSchema.$inferSelect;
+type BroadcastMessage = { type: OutgoingMessageType; [key: string]: unknown };
+
+const maxSyncCount = () => Number(env.THREAD_SYNC_MAX_COUNT || 20);
+
+/**
+ * Per-connection mail engine (Phase 3 of MIGRATION-PLAN.md §2).
+ *
+ * Replaces the `ZeroDriver` Durable Object: same method surface, but a plain
+ * class — thread/label index on Postgres (mail-index.ts, no shards), message
+ * bodies in the BlobStore, provider access through the MailManager driver
+ * (IMAP ops route to the sidecar via the proxy driver). Runs identically on
+ * Node and workerd.
+ *
+ * Concurrency model: instances are memoized per process; `syncInProgress` is
+ * an efficiency guard only — correctness comes from idempotent upserts keyed
+ * (connection_id, thread_id). Phase 4 adds BullMQ jobId dedup across
+ * processes.
+ */
+export class MailEngine {
+  private syncInProgress = new Set<string>();
+
+  private constructor(
+    readonly connectionId: string,
+    private connection: ConnectionRow,
+    private driver: MailManager,
+  ) {}
+
+  static async init(connectionId: string): Promise<MailEngine> {
+    const { connectionToDriver } = await import('./server-utils');
+    const { db } = createDb(env.HYPERDRIVE.connectionString);
+    const row = await db.query.connection.findFirst({
+      where: (fields, { eq }) => eq(fields.id, connectionId),
+    });
+    if (!row) throw new Error(`Connection ${connectionId} not found`);
+    return new MailEngine(connectionId, row, connectionToDriver(row));
+  }
+
+  /**
+   * Test/tooling seam: build an engine around an explicit driver instance
+   * (e.g. a direct ImapSmtpMailManager in integration tests, bypassing the
+   * sidecar RPC hop). Not used in production paths.
+   */
+  static createWithDriver(
+    connectionId: string,
+    connection: ConnectionRow,
+    driver: MailManager,
+  ): MailEngine {
+    return new MailEngine(connectionId, connection, driver);
+  }
+
+  /**
+   * Realtime invalidation hook. Phase 5 replaces this with publishBeacon()
+   * (Redis pub/sub -> SSE); until then it only logs so callers keep their
+   * shape without a WS layer on Node.
+   */
+  broadcast(message: BroadcastMessage) {
+    console.debug(`[MailEngine:${this.connectionId}] beacon (pending Phase 5):`, message.type);
+  }
+
+  async reloadFolder(folder: string) {
+    this.broadcast({ type: OutgoingMessageType.Mail_List, folder });
+  }
+
+  // -------------------------------------------------------------------------
+  // Driver passthrough (unchanged semantics from ZeroDriver)
+  // -------------------------------------------------------------------------
+
+  async normalizeIds(ids: string[]) {
+    return this.driver.normalizeIds(ids);
+  }
+
+  async sendDraft(id: string, data: Parameters<MailManager['sendDraft']>[1]) {
+    return await this.driver.sendDraft(id, data);
+  }
+
+  async create(data: Parameters<MailManager['create']>[0]) {
+    return await this.driver.create(data);
+  }
+
+  async delete(id: string) {
+    return await this.driver.delete(id);
+  }
+
+  async getEmailAliases() {
+    return await this.driver.getEmailAliases();
+  }
+
+  async getMessageAttachments(messageId: string) {
+    return await this.driver.getMessageAttachments(messageId);
+  }
+
+  async getRawEmail(id: string) {
+    return await this.driver.getRawEmail(id);
+  }
+
+  async rawListThreads(params: {
+    folder: string;
+    query?: string;
+    maxResults?: number;
+    labelIds?: string[];
+    pageToken?: string;
+  }): Promise<IGetThreadsResponse> {
+    return await this.driver.list(params);
+  }
+
+  async modifyLabels(threadIds: string[], addLabelIds: string[], removeLabelIds: string[]) {
+    return await this.driver.modifyLabels(threadIds, {
+      addLabels: addLabelIds,
+      removeLabels: removeLabelIds,
+    });
+  }
+
+  async listHistory<T>(historyId: string) {
+    return await this.driver.listHistory<T>(historyId);
+  }
+
+  async getUserLabels() {
+    return await this.driver.getUserLabels();
+  }
+
+  async getLabel(id: string) {
+    return await this.driver.getLabel(id);
+  }
+
+  async createLabel(params: {
+    name: string;
+    color?: { backgroundColor: string; textColor: string };
+  }) {
+    return await this.driver.createLabel(params);
+  }
+
+  async bulkDelete(threadIds: string[]) {
+    return await this.driver.modifyLabels(threadIds, {
+      addLabels: ['TRASH'],
+      removeLabels: ['INBOX'],
+    });
+  }
+
+  async bulkArchive(threadIds: string[]) {
+    return await this.driver.modifyLabels(threadIds, { addLabels: [], removeLabels: ['INBOX'] });
+  }
+
+  async updateLabel(
+    id: string,
+    labelData: { name: string; color?: { backgroundColor: string; textColor: string } },
+  ) {
+    return await this.driver.updateLabel(id, labelData);
+  }
+
+  async deleteLabel(id: string) {
+    return await this.driver.deleteLabel(id);
+  }
+
+  async createDraft(draftData: CreateDraftData) {
+    return await this.driver.createDraft(draftData);
+  }
+
+  async getDraft(id: string) {
+    return await this.driver.getDraft(id);
+  }
+
+  async listDrafts(params: { q?: string; maxResults?: number; pageToken?: string }) {
+    return await this.driver.listDrafts(params);
+  }
+
+  async deleteDraft(id: string) {
+    await this.driver.deleteDraft(id);
+    await this.reloadFolder('drafts');
+    return { success: true };
+  }
+
+  // -------------------------------------------------------------------------
+  // Index operations (Postgres)
+  // -------------------------------------------------------------------------
+
+  async getAllSubjects() {
+    return await getAllSubjects(this.connectionId);
+  }
+
+  async deleteAllSpam() {
+    return await deleteSpamThreads(this.connectionId);
+  }
+
+  async count() {
+    const folders = ['inbox', 'sent', 'spam', 'archive', 'trash'];
+    const results = await countThreadsByLabels(
+      this.connectionId,
+      folders.map((f) => f.toUpperCase()),
+    );
+    const resultMap = new Map(results.map((r) => [r.labelId, r.count]));
+    return folders.map((f) => ({ label: f, count: resultMap.get(f.toUpperCase()) ?? 0 }));
+  }
+
+  async getThreadCount() {
+    return await countIndexedThreads(this.connectionId);
+  }
+
+  async deleteThread(id: string) {
+    await deleteIndexedThread(this.connectionId, id);
+    this.broadcast({ type: OutgoingMessageType.Mail_List, folder: 'trash' });
+  }
+
+  normalizeFolderName(folderName: string) {
+    return folderName === 'bin' ? 'trash' : folderName;
+  }
+
+  async getThreadsFromDB(params: {
+    labelIds?: string[];
+    folder?: string;
+    q?: string;
+    maxResults?: number;
+    pageToken?: string;
+  }): Promise<IGetThreadsResponse> {
+    const maxResults = params.maxResults ?? 50;
+    const folder = params.folder ? this.normalizeFolderName(params.folder) : undefined;
+
+    // Folder membership is label membership; combining folder + explicit
+    // labels requires all of them (parity with the DO queryThreads cases).
+    const labelIds = [...(params.labelIds ?? [])];
+    if (folder) labelIds.push(folder.toUpperCase());
+
+    const result = await findThreads(this.connectionId, {
+      labelIds,
+      searchText: params.q,
+      pageToken: params.pageToken,
+      maxResults,
+      requireAllLabels: labelIds.length > 1,
+    });
+
+    return {
+      threads: result.threads.map((t) => ({ id: t.id, historyId: null })),
+      nextPageToken: result.nextPageToken,
+    };
+  }
+
+  async listThreads(params: {
+    folder: string;
+    query?: string;
+    maxResults?: number;
+    labelIds?: string[];
+    pageToken?: string;
+  }) {
+    return await this.getThreadsFromDB(params);
+  }
+
+  async list(params: {
+    folder: string;
+    query?: string;
+    maxResults?: number;
+    labelIds?: string[];
+    pageToken?: string;
+  }) {
+    return await this.getThreadsFromDB(params);
+  }
+
+  async getThreadFromDB(id: string, includeDrafts = false): Promise<IGetThreadResponse> {
+    const indexed = await getIndexedThread(this.connectionId, id);
+    if (!indexed) {
+      await this.syncThread({ threadId: id });
+      // Re-read after sync so a first-time open returns content immediately
+      // (the DO version returned empty and relied on a client refetch).
+      const synced = await getIndexedThread(this.connectionId, id);
+      if (!synced) {
+        return {
+          messages: [],
+          latest: undefined,
+          hasUnread: false,
+          totalReplies: 0,
+          labels: [],
+        } satisfies IGetThreadResponse;
+      }
+    }
+
+    const storedThread = await getThreadBlobStore().get(threadBlobKey(this.connectionId, id));
+    let messages: ParsedMessage[] = storedThread
+      ? (JSON.parse(storedThread) as IGetThreadResponse).messages
+      : [];
+
+    const isLatestDraft = messages.some((e) => e.isDraft === true);
+    if (!includeDrafts) messages = messages.filter((e) => e.isDraft !== true);
+
+    const labelsList: IndexLabel[] = await getThreadLabels(this.connectionId, id);
+    const labelIds = labelsList.map((l) => l.id);
+
+    return {
+      messages,
+      latest: messages.findLast((e) => e.isDraft !== true),
+      hasUnread: labelIds.includes('UNREAD'),
+      totalReplies: messages.filter((e) => e.isDraft !== true).length,
+      labels: labelsList,
+      isLatestDraft,
+    } satisfies IGetThreadResponse;
+  }
+
+  async getThread(threadId: string, includeDrafts = false) {
+    return await this.getThreadFromDB(threadId, includeDrafts);
+  }
+
+  async get(id: string) {
+    return await this.getThreadFromDB(id);
+  }
+
+  async modifyThreadLabelsInDB(threadId: string, addLabels: string[], removeLabels: string[]) {
+    const currentLabelsData = await getThreadLabels(this.connectionId, threadId);
+    const currentLabels = currentLabelsData.map((l) => l.id);
+
+    const result = await modifyThreadLabels(this.connectionId, threadId, addLabels, removeLabels);
+
+    const allAffectedLabels = [...new Set([...addLabels, ...removeLabels])];
+    for (const l of allAffectedLabels) await this.reloadFolder(l.toLowerCase());
+    this.broadcast({ type: OutgoingMessageType.Mail_Get, threadId });
+
+    return {
+      success: true,
+      threadId,
+      previousLabels: currentLabels,
+      addedLabels: result.addedLabels,
+      removedLabels: result.removedLabels,
+    };
+  }
+
+  async modifyThreadLabelsByName(
+    threadId: string,
+    addLabelNames: string[],
+    removeLabelNames: string[],
+  ) {
+    const userLabels = await this.getUserLabels();
+    const labelMap = new Map(userLabels.map((l) => [l.name.toLowerCase(), l.id]));
+
+    const resolve = (names: string[]) =>
+      names
+        .map((name) => {
+          const id = labelMap.get(name.toLowerCase());
+          if (!id) console.warn(`Label "${name}" not found in user labels`);
+          return id;
+        })
+        .filter((id): id is string => !!id);
+
+    return await this.modifyThreadLabelsInDB(threadId, resolve(addLabelNames), resolve(removeLabelNames));
+  }
+
+  async storeThreadInDB(
+    threadData: {
+      id: string;
+      threadId: string;
+      providerId: string;
+      latestSender: unknown;
+      latestReceivedOn: string;
+      latestSubject: string;
+    },
+    labelIds: string[],
+  ): Promise<void> {
+    await upsertThread(
+      this.connectionId,
+      {
+        threadId: threadData.threadId,
+        providerId: threadData.providerId,
+        latestSender: threadData.latestSender,
+        latestReceivedOn: threadData.latestReceivedOn,
+        latestSubject: threadData.latestSubject,
+      },
+      labelIds,
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Sync (in-process for Phase 3; Phase 4 wraps these in BullMQ jobs)
+  // -------------------------------------------------------------------------
+
+  async syncThread({
+    threadId,
+    extraLabelIds = [],
+  }: {
+    threadId: string;
+    /**
+     * Folder label(s) to attach in addition to message tags. The IMAP
+     * driver's per-message tags carry flags (UNREAD/STARRED/keywords) but
+     * not folder membership — the folder is only known by whoever listed it,
+     * so folder-driven syncs must pass it in. (Latent in the DO/workflow
+     * version too: it stored tags only, so IMAP threads never got INBOX.)
+     */
+    extraLabelIds?: string[];
+  }): Promise<{
+    success: boolean;
+    threadId: string;
+    reason?: string;
+    broadcastSent: boolean;
+  }> {
+    if (this.syncInProgress.has(threadId)) {
+      return { success: true, threadId, broadcastSent: false };
+    }
+    this.syncInProgress.add(threadId);
+    try {
+      const thread = await this.driver.get(threadId);
+      const latest = thread.latest;
+      if (!latest) {
+        return { success: false, threadId, reason: 'No latest message', broadcastSent: false };
+      }
+
+      await getThreadBlobStore().put(
+        threadBlobKey(this.connectionId, threadId),
+        JSON.stringify(thread),
+      );
+
+      let normalizedReceivedOn: string;
+      try {
+        normalizedReceivedOn = new Date(latest.receivedOn).toISOString();
+      } catch {
+        normalizedReceivedOn = new Date().toISOString();
+      }
+
+      await upsertThread(
+        this.connectionId,
+        {
+          threadId,
+          providerId: this.connection.providerId,
+          latestSender: latest.sender,
+          latestReceivedOn: normalizedReceivedOn,
+          latestSubject: latest.subject,
+        },
+        [...new Set([...(latest.tags?.map((tag) => tag.id) ?? []), ...extraLabelIds])],
+      );
+
+      this.broadcast({ type: OutgoingMessageType.Mail_Get, threadId });
+      return { success: true, threadId, broadcastSent: true };
+    } catch (error) {
+      console.error(`[MailEngine] Failed to sync thread ${threadId}:`, error);
+      return {
+        success: false,
+        threadId,
+        reason: error instanceof Error ? error.message : String(error),
+        broadcastSent: false,
+      };
+    } finally {
+      this.syncInProgress.delete(threadId);
+    }
+  }
+
+  /**
+   * One bounded sync pass over a folder: list the most recent page from the
+   * provider and sync each thread with small concurrency (fail2ban-safe: the
+   * driver multiplexes over the sidecar's single working connection).
+   * Port of SyncThreadsWorkflow's page processing, minus the workflow.
+   */
+  async syncFolderOnce(folder: string): Promise<{ synced: number; total: number }> {
+    const listing = await this.driver.list({ folder, maxResults: maxSyncCount() });
+    const ids = listing.threads.map((t) => t.id);
+    const folderLabel = this.normalizeFolderName(folder).toUpperCase();
+
+    let synced = 0;
+    const concurrency = 3;
+    for (let i = 0; i < ids.length; i += concurrency) {
+      const batch = ids.slice(i, i + concurrency);
+      const results = await Promise.allSettled(
+        batch.map((id) => this.syncThread({ threadId: id, extraLabelIds: [folderLabel] })),
+      );
+      synced += results.filter((r) => r.status === 'fulfilled' && r.value.success).length;
+    }
+
+    await this.reloadFolder(folder);
+    console.log(`[MailEngine:${this.connectionId}] syncFolderOnce(${folder}): ${synced}/${ids.length}`);
+    return { synced, total: ids.length };
+  }
+
+  async syncFolders() {
+    const threadCount = await this.getThreadCount();
+    if (threadCount < maxSyncCount()) {
+      await this.syncFolderOnce('inbox');
+    }
+  }
+
+  /** External new-mail signal (IMAP sidecar IDLE/poll callback). */
+  async notifyNewMail(folder = 'inbox'): Promise<void> {
+    // Fire-and-forget; Phase 4 turns this into a debounced BullMQ job.
+    void this.syncFolderOnce(folder).catch((error) =>
+      console.error(`[MailEngine] notifyNewMail sync failed for ${folder}:`, error),
+    );
+  }
+
+  async forceReSync() {
+    this.syncInProgress.clear();
+    await clearIndex(this.connectionId);
+    await this.syncFolders();
+  }
+
+  async isSyncing(): Promise<boolean> {
+    return false;
+  }
+
+  // -------------------------------------------------------------------------
+  // Misc (parity surface)
+  // -------------------------------------------------------------------------
+
+  async unsnoozeThreadsHandler(payload: { connectionId: string; threadIds: string[] }) {
+    const { threadIds } = payload;
+    if (threadIds.length) {
+      await this.modifyLabels(threadIds, ['INBOX'], ['SNOOZED']);
+      await snoozeStore.delete(this.connectionId, threadIds);
+    }
+  }
+
+  async suggestRecipients(query = '', limit = 10) {
+    const lower = query.toLowerCase();
+    const rows = await getRecentSenders(this.connectionId, 100);
+
+    const map = new Map<string, { email: string; name?: string | null; freq: number; last: number }>();
+    for (const row of rows) {
+      const sender = row.latestSender;
+      if (!sender?.email) continue;
+      const key = sender.email.toLowerCase();
+      const lastTs = row.latestReceivedOn ? new Date(row.latestReceivedOn).getTime() : 0;
+      const entry = map.get(key);
+      if (!entry) {
+        map.set(key, { email: sender.email, name: sender.name || null, freq: 1, last: lastTs });
+      } else {
+        entry.freq += 1;
+        if (lastTs > entry.last) entry.last = lastTs;
+      }
+    }
+
+    let contacts = Array.from(map.values());
+    if (lower) {
+      contacts = contacts.filter(
+        (c) => c.email.toLowerCase().includes(lower) || c.name?.toLowerCase().includes(lower),
+      );
+    }
+    contacts.sort((a, b) => b.freq - a.freq || b.last - a.last);
+
+    return contacts.slice(0, limit).map((c) => ({
+      email: c.email,
+      name: c.name,
+      displayText: c.name ? `${c.name} <${c.email}>` : c.email,
+    }));
+  }
+
+  async inboxRag(query: string): Promise<{ result: string; data: unknown[] }> {
+    if (!env.AUTORAG_ID) {
+      return { result: 'Not enabled', data: [] };
+    }
+    // AutoRAG was a Cloudflare-only product; with AUTORAG_ID unset in the
+    // self-hosted config this path is unreachable. Kept as a guard.
+    console.warn(`[MailEngine] inboxRag requested for "${query}" but AutoRAG is not available`);
+    return { result: 'Not enabled', data: [] };
+  }
+
+  async searchThreads(params: {
+    query: string;
+    folder?: string;
+    maxResults?: number;
+    labelIds?: string[];
+    pageToken?: string;
+  }) {
+    const { query, folder = 'inbox', maxResults = 50, labelIds = [], pageToken } = params;
+    try {
+      const r = await this.driver.list({ folder, query, labelIds, maxResults, pageToken });
+      return {
+        threadIds: r.threads.map((t) => t.id),
+        source: 'raw' as const,
+        nextPageToken: pageToken,
+      };
+    } catch (error) {
+      console.error('[MailEngine] searchThreads failed:', error);
+      return { threadIds: [], source: 'raw' as const, nextPageToken: pageToken };
+    }
+  }
+
+  /** TODO(Phase 3.4): topic generation moves here with a Redis cache. */
+  async getUserTopics(): Promise<{ topic: string; usecase: string }[]> {
+    return [];
+  }
+
+  /** TODO(Phase 3.4): real per-connection storage estimate from Postgres. */
+  getDatabaseSize(): number {
+    return 0;
+  }
+}
+
+const engineCache = new Map<string, Promise<MailEngine>>();
+
+/**
+ * Memoized per-process engine lookup (replaces DO idFromName + dormroom
+ * shard addressing). The promise is cached so concurrent first calls share
+ * one init — the plain-class equivalent of blockConcurrencyWhile.
+ */
+export const getMailEngine = (connectionId: string): Promise<MailEngine> => {
+  let promise = engineCache.get(connectionId);
+  if (!promise) {
+    promise = MailEngine.init(connectionId).catch((error) => {
+      engineCache.delete(connectionId);
+      throw error;
+    });
+    engineCache.set(connectionId, promise);
+  }
+  return promise;
+};
+
+/** Drop a cached engine (e.g. after connection credentials change). */
+export const evictMailEngine = (connectionId: string) => {
+  engineCache.delete(connectionId);
+};

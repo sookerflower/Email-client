@@ -154,7 +154,7 @@ export function ThreadContextMenu({
 }: EmailContextMenuProps) {
   const { folder } = useParams<{ folder: string }>();
   const [mail, setMail] = useMail();
-  const [{ isLoading, isFetching }] = useThreads();
+  const [{ _isLoading, _isFetching }] = useThreads();
   const currentFolder = folder ?? '';
   const isArchiveFolder = currentFolder === FOLDERS.ARCHIVE;
   const isSnoozedFolder = currentFolder === FOLDERS.SNOOZED;
@@ -578,7 +578,7 @@ export function ThreadContextMenu({
         onSubmit={handleCreateLabel}
       />
       <ContextMenu>
-        <ContextMenuTrigger disabled={isLoading || isFetching} className="w-full">
+        <ContextMenuTrigger className="w-full">
           {children}
         </ContextMenuTrigger>
         <ContextMenuContent

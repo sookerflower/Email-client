@@ -3,7 +3,7 @@ import {
   OutlookSearchAssistantSystemPrompt,
 } from '../../../lib/prompts';
 import { activeDriverProcedure } from '../../trpc';
-import { openai } from '@ai-sdk/openai';
+import { openai } from '../../../lib/ai-provider';
 import { generateObject } from 'ai';
 import { env } from '../../../env';
 import { z } from 'zod';

@@ -24,18 +24,11 @@ const AIToggleButton = () => {
             >
               <div className="flex items-center justify-center">
                 <img
-                  src="/black-icon.svg"
+                  src="/ai-logo.png"
                   alt="AI Assistant"
-                  width={22}
-                  height={22}
-                  className="block dark:hidden"
-                />
-                <img
-                  src="/white-icon.svg"
-                  alt="AI Assistant"
-                  width={22}
-                  height={22}
-                  className="hidden dark:block"
+                  width={24}
+                  height={24}
+                  className="h-6 w-6 object-contain rounded-md"
                 />
               </div>
             </Button>

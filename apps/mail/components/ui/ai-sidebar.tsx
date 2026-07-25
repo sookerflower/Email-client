@@ -10,7 +10,6 @@ import { AIChat } from '@/components/create/ai-chat';
 import { useTRPC } from '@/providers/query-provider';
 import { Tools } from '../../../server/src/types';
 import { useDoState } from '../mail/use-do-state';
-import { useBilling } from '@/hooks/use-billing';
 import { PromptsDialog } from './prompts-dialog';
 import { Button } from '@/components/ui/button';
 import { useHotkeys } from 'react-hotkeys-hook';
@@ -18,7 +17,6 @@ import { useLabels } from '@/hooks/use-labels';
 import { useAgentChat } from 'agents/ai-react';
 import { X, Expand, Plus } from 'lucide-react';
 import { IncomingMessageType } from '../party';
-import { Gauge } from '@/components/ui/gauge';
 import { useParams } from 'react-router';
 import { useAgent } from 'agents/react';
 import { useQueryState } from 'nuqs';
@@ -32,7 +30,6 @@ interface ChatHeaderProps {
   onToggleViewMode: () => void;
   isFullScreen: boolean;
   isPopup: boolean;
-  isPro: boolean;
   onNewChat: () => void;
 }
 
@@ -42,11 +39,8 @@ function ChatHeader({
   onToggleViewMode,
   isFullScreen,
   isPopup,
-  isPro,
   onNewChat,
 }: ChatHeaderProps) {
-  const [, setPricingDialog] = useQueryState('pricingDialog');
-  const { chatMessages } = useBilling();
   return (
     <div className="relative flex items-center justify-between px-2.5 pb-[10px] pt-[13px]">
       <TooltipProvider delayDuration={0}>
@@ -113,41 +107,6 @@ function ChatHeader({
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Go to {isPopup ? 'sidebar' : 'popup'}</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </>
-        )}
-
-        {!isPro && (
-          <>
-            <TooltipProvider delayDuration={0}>
-              <Tooltip>
-                <TooltipTrigger asChild className="md:h-fit md:px-2">
-                  <div>
-                    <Gauge
-                      max={chatMessages.included_usage}
-                      value={chatMessages.usage}
-                      size="small"
-                      showValue={true}
-                    />
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>
-                    You've used {chatMessages.usage} out of {chatMessages.included_usage} chat
-                    messages.
-                  </p>
-                  <p className="mb-2">Upgrade for unlimited messages!</p>
-                  <Button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setPricingDialog('true');
-                    }}
-                    className="h-8 w-full"
-                  >
-                    Start 7 day free trial
-                  </Button>
-                </TooltipContent>
               </Tooltip>
             </TooltipProvider>
           </>
@@ -337,7 +296,6 @@ export function useAISidebar() {
 function AISidebar({ className }: AISidebarProps) {
   const { open, setOpen, isFullScreen, setIsFullScreen, toggleViewMode, isSidebar, isPopup } =
     useAISidebar();
-  const { isPro, track, refetch: refetchBilling } = useBilling();
   const queryClient = useQueryClient();
   const trpc = useTRPC();
   const [threadId] = useQueryState('threadId');
@@ -458,8 +416,6 @@ function AISidebar({ className }: AISidebarProps) {
           );
           break;
       }
-      await track({ featureId: 'chat-messages', value: 1 });
-      await refetchBilling();
     },
   });
 
@@ -496,7 +452,6 @@ function AISidebar({ className }: AISidebarProps) {
                       onToggleViewMode={toggleViewMode}
                       isFullScreen={isFullScreen}
                       isPopup={isPopup}
-                      isPro={isPro ?? false}
                       onNewChat={handleNewChat}
                     />
                     <div className="relative flex-1 overflow-hidden">
@@ -542,7 +497,6 @@ function AISidebar({ className }: AISidebarProps) {
                   onToggleViewMode={toggleViewMode}
                   isFullScreen={isFullScreen}
                   isPopup={isPopup}
-                  isPro={isPro ?? false}
                   onNewChat={handleNewChat}
                 />
                 <div className="relative flex-1 overflow-hidden">

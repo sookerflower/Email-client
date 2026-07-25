@@ -9,13 +9,15 @@ export default [
   layout('(full-width)/layout.tsx', [
     route('/about', '(full-width)/about.tsx'),
     route('/terms', '(full-width)/terms.tsx'),
-    route('/pricing', '(full-width)/pricing.tsx'),
+    // Billing/pricing disabled for self-hosted deployment
+    // route('/pricing', '(full-width)/pricing.tsx'),
     route('/privacy', '(full-width)/privacy.tsx'),
     route('/contributors', '(full-width)/contributors.tsx'),
     route('/hr', '(full-width)/hr.tsx'),
   ]),
 
   route('/login', '(auth)/login/page.tsx'),
+  route('/login/custom-smtp', '(auth)/login/custom-smtp/page.tsx'),
 
   // Enable this when we have a zero signup page
   // route('/zero/signup', '(auth)/zero/signup/page.tsx'),

@@ -1,10 +1,10 @@
+import { promptStore } from './stores';
 import { ReSummarizeThread, SummarizeMessage, SummarizeThread } from './brain.fallback.prompts';
 import { getSubscriptionFactory } from './factories/subscription-factory.registry';
 import { AiChatPrompt, StyledEmailAssistantSystemPrompt } from './prompts';
 import { resetConnection } from './server-utils';
 import { EPrompts, EProviders } from '../types';
 import { getPromptName } from '../pipelines';
-import { env } from '../env';
 
 export const enableBrainFunction = async (connection: { id: string; providerId: EProviders }) => {
   try {
@@ -28,9 +28,9 @@ export const disableBrainFunction = async (connection: { id: string; providerId:
 };
 
 export const getPrompt = async (promptName: string, fallback: string) => {
-  const existingPrompt = await env.prompts_storage.get(promptName);
+  const existingPrompt = await promptStore.get(promptName);
   if (!existingPrompt || existingPrompt === 'undefined') {
-    await env.prompts_storage.put(promptName, fallback);
+    await promptStore.set(promptName, fallback);
     return fallback;
   }
   return existingPrompt;

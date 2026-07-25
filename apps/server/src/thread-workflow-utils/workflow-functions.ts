@@ -14,20 +14,18 @@
  * Reuse or distribution of this file requires a license from Zero Email Inc.
  */
 import {
-  SummarizeMessage,
   ReSummarizeThread,
   SummarizeThread,
 } from '../lib/brain.fallback.prompts';
 import { getZeroAgent, getZeroSocketAgent, modifyThreadLabelsInDB } from '../lib/server-utils';
 import { EPrompts, defaultLabels, type ParsedMessage } from '../types';
 import { analyzeEmailIntent, generateAutomaticDraft } from './index';
-import { getPrompt, getEmbeddingVector } from '../pipelines.effect';
-import { messageToXML, threadToXML } from './workflow-utils';
+import { getPrompt } from '../pipelines.effect';
+import { threadToXML } from './workflow-utils';
 import type { WorkflowContext } from './workflow-engine';
-import { bulkDeleteKeys } from '../lib/bulk-delete';
+import { releaseProcessingKeys as bulkDeleteKeys } from '../lib/stores';
 import { getPromptName } from '../pipelines';
 import { env } from 'cloudflare:workers';
-import { Effect } from 'effect';
 
 export type WorkflowFunction = (context: WorkflowContext) => Promise<any>;
 
@@ -156,159 +154,6 @@ export const workflowFunctions: Record<string, WorkflowFunction> = {
     return { draftId: createdDraft?.id || null };
   },
 
-  findMessagesToVectorize: async (context) => {
-    console.log('[WORKFLOW_FUNCTIONS] Finding messages to vectorize');
-    const messageIds = context.thread.messages.map((message) => message.id);
-    console.log('[WORKFLOW_FUNCTIONS] Found message IDs:', messageIds);
-
-    const batchSize = 20;
-    const batches = [];
-    for (let i = 0; i < messageIds.length; i += batchSize) {
-      batches.push(messageIds.slice(i, i + batchSize));
-    }
-
-    const getExistingMessagesBatch = (batch: string[]): Effect.Effect<any[], never> =>
-      Effect.tryPromise(async () => {
-        console.log('[WORKFLOW_FUNCTIONS] Fetching batch of', batch.length, 'message IDs');
-        return await env.VECTORIZE_MESSAGE.getByIds(batch);
-      }).pipe(
-        Effect.catchAll((error) => {
-          console.log('[WORKFLOW_FUNCTIONS] Failed to fetch batch:', error);
-          return Effect.succeed([]);
-        }),
-      );
-
-    const batchEffects = batches.map(getExistingMessagesBatch);
-    const program = Effect.all(batchEffects, { concurrency: 3 }).pipe(
-      Effect.map((results) => {
-        const allExistingMessages = results.flat();
-        console.log('[WORKFLOW_FUNCTIONS] Found existing messages:', allExistingMessages.length);
-        return allExistingMessages;
-      }),
-    );
-
-    const existingMessages = await Effect.runPromise(program);
-
-    const existingMessageIds = new Set(existingMessages.map((message: any) => message.id));
-    const messagesToVectorize = context.thread.messages.filter(
-      (message) => !existingMessageIds.has(message.id),
-    );
-
-    console.log('[WORKFLOW_FUNCTIONS] Messages to vectorize:', messagesToVectorize.length);
-    return { messagesToVectorize, existingMessages };
-  },
-
-  vectorizeMessages: async (context) => {
-    const vectorizeResult = context.results?.get('find-messages-to-vectorize');
-    if (!vectorizeResult?.messagesToVectorize) {
-      console.log('[WORKFLOW_FUNCTIONS] No messages to vectorize, skipping');
-      return { embeddings: [] };
-    }
-
-    const messagesToVectorize = vectorizeResult.messagesToVectorize;
-    console.log(
-      '[WORKFLOW_FUNCTIONS] Starting message vectorization for',
-      messagesToVectorize.length,
-      'messages',
-    );
-
-    type VectorizedMessage = {
-      id: string;
-      metadata: {
-        connection: string;
-        thread: string;
-        summary: string;
-      };
-      values: number[];
-    };
-
-    const vectorizeSingleMessage = (
-      message: ParsedMessage,
-    ): Effect.Effect<VectorizedMessage | null, never> =>
-      Effect.tryPromise(async (): Promise<VectorizedMessage | null> => {
-        console.log('[WORKFLOW_FUNCTIONS] Converting message to XML:', message.id);
-        const prompt = await messageToXML(message);
-        if (!prompt) {
-          console.log('[WORKFLOW_FUNCTIONS] Message has no prompt, skipping:', message.id);
-          return null;
-        }
-
-        const SummarizeMessagePrompt = await getPrompt(
-          getPromptName(message.connectionId ?? '', EPrompts.SummarizeMessage),
-          SummarizeMessage,
-        );
-
-        const messages = [
-          { role: 'system', content: SummarizeMessagePrompt },
-          { role: 'user', content: prompt },
-        ];
-
-        const response = await env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
-          messages,
-        });
-
-        const summary = 'response' in response ? response.response : response;
-        if (!summary || typeof summary !== 'string') {
-          throw new Error(`Invalid summary response for message ${message.id}`);
-        }
-
-        const embeddingVector = await getEmbeddingVector(summary);
-        if (!embeddingVector) {
-          throw new Error(`Message Embedding vector is null ${message.id}`);
-        }
-
-        return {
-          id: message.id,
-          metadata: {
-            connection: message.connectionId ?? '',
-            thread: message.threadId ?? '',
-            summary,
-          },
-          values: embeddingVector,
-        };
-      }).pipe(
-        Effect.catchAll((error) => {
-          console.log('[WORKFLOW_FUNCTIONS] Failed to vectorize message:', {
-            messageId: message.id,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          return Effect.succeed(null);
-        }),
-      );
-
-    const vectorizeEffects: Effect.Effect<VectorizedMessage | null, never>[] =
-      messagesToVectorize.map(vectorizeSingleMessage);
-
-    const program = Effect.all(vectorizeEffects, { concurrency: 3 }).pipe(
-      Effect.map((results) => {
-        const validResults = results.filter(
-          (result): result is VectorizedMessage => result !== null,
-        );
-        console.log('[WORKFLOW_FUNCTIONS] Successfully vectorized messages:', validResults.length);
-        return { embeddings: validResults };
-      }),
-    );
-
-    return Effect.runPromise(program);
-  },
-
-  upsertEmbeddings: async (context) => {
-    const vectorizeResult = context.results?.get('vectorize-messages');
-    if (!vectorizeResult?.embeddings || vectorizeResult.embeddings.length === 0) {
-      console.log('[WORKFLOW_FUNCTIONS] No embeddings to upsert');
-      return { upserted: 0 };
-    }
-
-    console.log(
-      '[WORKFLOW_FUNCTIONS] Upserting message vectors:',
-      vectorizeResult.embeddings.length,
-    );
-    await env.VECTORIZE_MESSAGE.upsert(vectorizeResult.embeddings);
-    console.log('[WORKFLOW_FUNCTIONS] Successfully upserted message vectors');
-
-    return { upserted: vectorizeResult.embeddings.length };
-  },
-
   cleanupWorkflowExecution: async (context) => {
     const workflowKey = `workflow_${context.threadId}`;
     const result = await bulkDeleteKeys([workflowKey]);
@@ -319,32 +164,6 @@ export const workflowFunctions: Record<string, WorkflowFunction> = {
       result,
     );
     return { cleaned: true };
-  },
-
-  checkExistingSummary: async (context) => {
-    console.log('[WORKFLOW_FUNCTIONS] Getting existing thread summary for:', context.threadId);
-    const threadSummary = await env.VECTORIZE.getByIds([context.threadId.toString()]);
-    if (!threadSummary.length) {
-      console.log('[WORKFLOW_FUNCTIONS] No existing thread summary found');
-      return { existingSummary: null };
-    }
-    console.log('[WORKFLOW_FUNCTIONS] Found existing thread summary');
-
-    const metadata = threadSummary[0].metadata;
-    if (!metadata || typeof metadata !== 'object') {
-      console.warn('[WORKFLOW_FUNCTIONS] Invalid metadata structure, returning null');
-      return { existingSummary: null };
-    }
-
-    const { summary, lastMsg } = metadata as any;
-    if (typeof summary !== 'string' || typeof lastMsg !== 'string') {
-      console.warn(
-        '[WORKFLOW_FUNCTIONS] Metadata missing required string properties (summary, lastMsg), returning null',
-      );
-      return { existingSummary: null };
-    }
-
-    return { existingSummary: { summary, lastMsg } };
   },
 
   generateThreadSummary: async (context) => {
@@ -377,38 +196,6 @@ export const workflowFunctions: Record<string, WorkflowFunction> = {
       );
       return { summary };
     }
-  },
-
-  upsertThreadSummary: async (context) => {
-    const summaryResult = context.results?.get('generate-thread-summary');
-    if (!summaryResult?.summary) {
-      console.log('[WORKFLOW_FUNCTIONS] No summary generated for thread');
-      return { upserted: false };
-    }
-
-    const embeddingVector = await getEmbeddingVector(summaryResult.summary);
-    if (!embeddingVector) {
-      console.log('[WORKFLOW_FUNCTIONS] Thread Embedding vector is null, skipping vector upsert');
-      return { upserted: false };
-    }
-
-    console.log('[WORKFLOW_FUNCTIONS] Upserting thread vector');
-    const newestMessage = context.thread.messages[context.thread.messages.length - 1];
-    await env.VECTORIZE.upsert([
-      {
-        id: context.threadId.toString(),
-        metadata: {
-          connection: context.connectionId.toString(),
-          thread: context.threadId.toString(),
-          summary: summaryResult.summary,
-          lastMsg: newestMessage?.id,
-        },
-        values: embeddingVector,
-      },
-    ]);
-    console.log('[WORKFLOW_FUNCTIONS] Successfully upserted thread vector');
-
-    return { upserted: true };
   },
 
   getUserLabels: async (context) => {

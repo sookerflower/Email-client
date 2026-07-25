@@ -24,6 +24,14 @@ export const customProviders: ProviderConfig[] = [
   //   isCustom: true,
   //   customRedirectPath: "/zero/signup"
   // }
+  {
+    id: 'imap',
+    name: 'Custom IMAP/SMTP',
+    requiredEnvVars: [],
+    config: {},
+    isCustom: true,
+    customRedirectPath: '/login/custom-smtp',
+  },
 ];
 
 export const authProviders = (env: Record<string, string>): ProviderConfig[] => [

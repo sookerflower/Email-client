@@ -28,9 +28,7 @@ export const draftsRouter = router({
       const { activeConnection } = ctx;
       const { stub: agent } = await getZeroAgent(activeConnection.id);
       const { q, maxResults, pageToken } = input;
-      return agent.listDrafts({ q, maxResults, pageToken }) as Awaited<
-        ReturnType<MailManager['listDrafts']>
-      >;
+      return await agent.listDrafts({ q, maxResults, pageToken });
     }),
   delete: activeDriverProcedure
     .input(

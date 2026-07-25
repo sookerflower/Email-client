@@ -10,7 +10,7 @@ import { getPrompt } from '../../../lib/brain';
 import { stripHtml } from 'string-strip-html';
 import { EPrompts } from '../../../types';
 import { env } from '../../../env';
-import { openai } from '@ai-sdk/openai';
+import { openai } from '../../../lib/ai-provider';
 import { generateText } from 'ai';
 import { z } from 'zod';
 

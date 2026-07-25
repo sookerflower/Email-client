@@ -1,0 +1,1 @@
+ALTER TABLE "mail0_connection" ADD COLUMN "imap_allow_insecure_tls" boolean;

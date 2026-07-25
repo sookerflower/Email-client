@@ -60,3 +60,10 @@ worker-configuration.d.ts
 tsx-0/
 
 tools.json
+# Path B migration — local-only artifacts
+apps/server/dist-node/
+apps/server/data/
+docker-data/
+.claude/
+.agents/
+apps/server/imap-sidecar/.label-store.json*

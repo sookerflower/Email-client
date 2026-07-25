@@ -1,5 +1,5 @@
+import { subscriptionStore } from './stores';
 import type { AppContext, EProviders, Sender } from '../types';
-import type { Customer } from 'autumn-js';
 import { env } from '../env';
 
 export const parseHeaders = (token: string) => {
@@ -33,14 +33,11 @@ export async function setSubscribedState(
   connectionId: string,
   providerId: EProviders,
 ): Promise<void> {
-  return await env.subscribed_accounts.put(
-    `${connectionId}__${providerId}`,
-    new Date().toISOString(),
-  );
+  await subscriptionStore.setSubscribed(connectionId, providerId);
 }
 
 export async function cleanupOnFailure(connectionId: string): Promise<void> {
-  return await env.subscribed_accounts.delete(connectionId);
+  await subscriptionStore.deleteAllForConnection(connectionId);
 }
 
 export const FOLDERS = {
@@ -367,12 +364,3 @@ export const cleanSearchValue = (q: string): string => {
     .trim();
 };
 
-const PRO_PLANS = ['pro-example', 'pro_annual', 'team', 'enterprise'] as const;
-
-export const isProCustomer = (customer: Customer) => {
-  return customer?.products && Array.isArray(customer.products)
-    ? customer.products.some((product) =>
-        PRO_PLANS.some((plan) => product.id?.includes(plan) || product.name?.includes(plan)),
-      )
-    : false;
-};

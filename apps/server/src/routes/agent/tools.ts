@@ -4,106 +4,19 @@ import type { IGetThreadResponse } from '../../lib/driver/types';
 import { composeEmail } from '../../trpc/routes/ai/compose';
 import { perplexity } from '@ai-sdk/perplexity';
 import { colors } from '../../lib/prompts';
-import { openai } from '@ai-sdk/openai';
+import { openai } from '../../lib/ai-provider';
 import { generateText, tool } from 'ai';
 import { Tools } from '../../types';
 import { env } from '../../env';
 import { z } from 'zod';
 
-type ModelTypes = 'summarize' | 'general' | 'chat' | 'vectorize';
+type ModelTypes = 'summarize' | 'general' | 'chat';
 
-const models: Record<ModelTypes, any> = {
+const _models: Record<ModelTypes, any> = {
   summarize: '@cf/facebook/bart-large-cnn',
   general: 'llama-3.3-70b-instruct-fp8-fast',
   chat: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-  vectorize: '@cf/baai/bge-large-en-v1.5',
 };
-
-export const getEmbeddingVector = async (
-  text: string,
-  gatewayId: 'vectorize-save' | 'vectorize-load',
-) => {
-  try {
-    const embeddingResponse = await env.AI.run(
-      models.vectorize,
-      { text },
-      {
-        gateway: {
-          id: gatewayId,
-        },
-      },
-    );
-    const embeddingVector = embeddingResponse.data[0];
-    return embeddingVector ?? null;
-  } catch (error) {
-    console.log('[getEmbeddingVector] failed', error);
-    return null;
-  }
-};
-
-// const askZeroMailbox = (connectionId: string) =>
-//   tool({
-//     description: 'Ask Zero a question about the mailbox',
-//     parameters: z.object({
-//       question: z.string().describe('The question to ask Zero'),
-//       topK: z.number().describe('The number of results to return').max(9).min(1).default(3),
-//     }),
-//     execute: async ({ question, topK = 3 }) => {
-//       const embedding = await getEmbeddingVector(question, 'vectorize-load');
-//       if (!embedding) {
-//         return { error: 'Failed to get embedding' };
-//       }
-//       const threadResults = await env.VECTORIZE.query(embedding, {
-//         topK,
-//         returnMetadata: 'all',
-//         filter: {
-//           connection: connectionId,
-//         },
-//       });
-
-//       if (!threadResults.matches.length) {
-//         return {
-//           response: [],
-//           success: false,
-//         };
-//       }
-//       return {
-//         response: threadResults.matches.map((e) => e.metadata?.['summary'] ?? 'no content'),
-//         success: true,
-//       };
-//     },
-//   });
-
-// const askZeroThread = (connectionId: string) =>
-//   tool({
-//     description: 'Ask Zero a question about a specific thread',
-//     parameters: z.object({
-//       threadId: z.string().describe('The ID of the thread to ask Zero about'),
-//       question: z.string().describe('The question to ask Zero'),
-//     }),
-//     execute: async ({ threadId, question }) => {
-//       const response = await env.VECTORIZE.getByIds([threadId]);
-//       if (!response.length) return { response: "I don't know, no threads found", success: false };
-//       const embedding = await getEmbeddingVector(question, 'vectorize-load');
-//       if (!embedding) {
-//         return { error: 'Failed to get embedding' };
-//       }
-//       const threadResults = await env.VECTORIZE.query(embedding, {
-//         topK: 1,
-//         returnMetadata: 'all',
-//         filter: {
-//           thread: threadId,
-//           connection: connectionId,
-//         },
-//       });
-//       const topThread = threadResults.matches[0];
-//       if (!topThread) return { response: "I don't know, no threads found", success: false };
-//       return {
-//         response: topThread.metadata?.['summary'] ?? 'no content',
-//         success: true,
-//       };
-//     },
-//   });
 
 /**
  * ⚠️  IMPORTANT
@@ -132,7 +45,8 @@ const getThreadSummary = (connectionId: string) =>
       id: z.string().describe('The ID of the email thread to get the summary of'),
     }),
     execute: async ({ id }) => {
-      const response = await env.VECTORIZE.getByIds([id]);
+      // Phase 3.3: Vectorize + Workers-AI replaced by the self-hosted LLM
+      // reading/writing the mail0_summary table. Return shape unchanged.
       let thread: IGetThreadResponse | null = null;
       try {
         const { result } = await getThread(connectionId, id);
@@ -141,16 +55,11 @@ const getThreadSummary = (connectionId: string) =>
         console.error('Error getting thread', error);
         return { error: 'Thread not found' };
       }
-      if (response.length && response?.[0]?.metadata?.['summary'] && thread?.latest?.subject) {
-        const result = response[0].metadata as { summary: string; connection: string };
-        if (result.connection !== connectionId) {
-          return null;
-        }
-        const shortResponse = await env.AI.run('@cf/facebook/bart-large-cnn', {
-          input_text: result.summary,
-        });
+      const { getOrGenerateThreadSummary } = await import('../../lib/summary-service');
+      const short = await getOrGenerateThreadSummary(connectionId, id).catch(() => null);
+      if (short && thread?.latest?.subject) {
         return {
-          short: shortResponse.summary,
+          short,
           subject: thread.latest?.subject,
           sender: thread.latest?.sender,
           date: thread.latest?.receivedOn,
@@ -479,8 +388,8 @@ export const webSearch = () =>
     },
   });
 
-export const tools = async (connectionId: string, ragEffect: boolean = false) => {
-  const _tools = {
+export const tools = async (connectionId: string) => {
+  return {
     [Tools.GetThread]: getEmail(),
     [Tools.GetThreadSummary]: getThreadSummary(connectionId),
     [Tools.ComposeEmail]: composeEmailTool(connectionId),
@@ -505,21 +414,12 @@ export const tools = async (connectionId: string, ragEffect: boolean = false) =>
         folder: z.string().describe('The folder to search the inbox for').default('inbox'),
       }),
       execute: async ({ query, maxResults, folder }) => {
+        console.log('[InboxRag] searching threads', { query, maxResults, folder });
         const { stub: agent } = await getZeroAgent(connectionId);
         const res = await agent.searchThreads({ query, maxResults, folder });
+        console.log('[InboxRag] returned threadIds', res.threadIds);
         return res.threadIds;
       },
-    }),
-  };
-  if (ragEffect) return _tools;
-  return {
-    ..._tools,
-    [Tools.InboxRag]: tool({
-      description:
-        'Search the inbox for emails using natural language. Returns only an array of threadIds.',
-      parameters: z.object({
-        query: z.string().describe('The query to search the inbox for'),
-      }),
     }),
   };
 };

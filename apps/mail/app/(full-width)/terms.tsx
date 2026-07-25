@@ -1,6 +1,6 @@
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
-import { Github, ArrowLeft, Link2 } from 'lucide-react';
+import { ArrowLeft, Link2 } from 'lucide-react';
 import { Navigation } from '@/components/navigation';
 import { Button } from '@/components/ui/button';
 import Footer from '@/components/home/footer';
@@ -93,8 +93,8 @@ const sections = [
     title: 'Overview',
     content: (
       <p>
-        0.email is an open-source email solution that enables users to self-host their email service
-        or integrate with external email providers. By using 0.email, you agree to these terms.
+        AxMail is an open-source email solution that enables users to self-host their email service
+        or integrate with external email providers. By using AxMail, you agree to these terms.
       </p>
     ),
   },
@@ -105,7 +105,7 @@ const sections = [
         <div>
           <h3 className="text-card-foreground mb-3 text-xl font-medium">Self-Hosted Service</h3>
           <ul className="ml-4 list-disc space-y-2">
-            <li>0.email provides software that users can deploy on their own infrastructure</li>
+            <li>AxMail provides software that users can deploy on their own infrastructure</li>
             <li>Users are responsible for their own hosting, maintenance, and compliance</li>
             <li>The software is provided &quot;as is&quot; under the MIT License</li>
           </ul>
@@ -115,7 +115,7 @@ const sections = [
             External Email Integration
           </h3>
           <ul className="ml-4 list-disc space-y-2">
-            <li>0.email can integrate with third-party email providers</li>
+            <li>AxMail can integrate with third-party email providers</li>
             <li>Users must comply with third-party providers&apos; terms of service</li>
             <li>We are not responsible for third-party service disruptions</li>
           </ul>
@@ -142,7 +142,7 @@ const sections = [
     title: 'Software License',
     content: (
       <div className="text-muted-foreground mt-4 space-y-3">
-        <p>0.email is licensed under the MIT License:</p>
+        <p>AxMail is licensed under the MIT License:</p>
         <ul className="ml-4 list-disc space-y-2">
           <li>Users can freely use, modify, and distribute the software</li>
           <li>The software comes with no warranties</li>
@@ -169,16 +169,7 @@ const sections = [
     title: 'Contact Information',
     content: (
       <div className="text-muted-foreground mt-4 space-y-3">
-        <p>For questions about these terms:</p>
-        <div className="flex flex-col space-y-2">
-          <a
-            href="https://github.com/Mail-0/Zero"
-            className="inline-flex items-center text-blue-600 hover:text-blue-800"
-          >
-            <Github className="mr-2 h-4 w-4" />
-            Open an issue on GitHub
-          </a>
-        </div>
+        <p>For questions about these terms, contact your system administrator or support team.</p>
       </div>
     ),
   },

@@ -13,7 +13,7 @@ import { useHotkeys, useHotkeysContext } from 'react-hotkeys-hook';
 import { ThreadDisplay } from '@/components/mail/thread-display';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useActiveConnection } from '@/hooks/use-connections';
-import { Check, ChevronDown, RefreshCcw } from 'lucide-react';
+import { Check, ChevronDown, RefreshCcw, SlidersHorizontal } from 'lucide-react';
 import { useMediaQuery } from '../../hooks/use-media-query';
 import useSearchLabels from '@/hooks/use-labels-search';
 import * as CustomIcons from '@/components/icons/icons';
@@ -21,7 +21,6 @@ import { MailList } from '@/components/mail/mail-list';
 import { useNavigate, useParams } from 'react-router';
 import { useMail } from '@/components/mail/use-mail';
 import { SidebarToggle } from '../ui/sidebar-toggle';
-import { PricingDialog } from '../ui/pricing-dialog';
 import { clearBulkSelectionAtom } from './use-mail';
 import AISidebar from '@/components/ui/ai-sidebar';
 import { useThreads } from '@/hooks/use-threads';
@@ -30,7 +29,6 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { Button } from '@/components/ui/button';
 import { useSession } from '@/lib/auth-client';
 import { m } from '@/paraglide/messages';
-import { isMac } from '@/lib/platform';
 import { useQueryState } from 'nuqs';
 import { cn } from '@/lib/utils';
 import { useAtom } from 'jotai';
@@ -50,7 +48,6 @@ import { useAtom } from 'jotai';
 //       },
 //     }),
 //   );
-//   const [, setPricingDialog] = useQueryState('pricingDialog');
 //   const [labels, setLabels] = useState<ITag[]>([]);
 //   const [newLabel, setNewLabel] = useState({ name: '', usecase: '' });
 //   const { mutateAsync: EnableBrain, isPending: isEnablingBrain } = useMutation(
@@ -60,7 +57,6 @@ import { useAtom } from 'jotai';
 //     trpc.brain.disableBrain.mutationOptions(),
 //   );
 //   const { data: brainState, refetch: refetchBrainState } = useBrainState();
-//   const { isLoading, isPro } = useBilling();
 
 //   useEffect(() => {
 //     if (storedLabels) {
@@ -157,11 +153,7 @@ import { useAtom } from 'jotai';
 //     <Dialog
 //       open={open}
 //       onOpenChange={(state) => {
-//         if (!isPro) {
-//           setPricingDialog('true');
-//         } else {
-//           setOpen(state);
-//         }
+//         setOpen(state);
 //       }}
 //     >
 //       <DialogTrigger asChild>
@@ -414,7 +406,6 @@ export function MailLayout() {
 
   return (
     <TooltipProvider delayDuration={0}>
-      <PricingDialog />
       <div className="rounded-inherit z-5 relative flex p-0 md:mr-0.5 md:mt-1">
         <ResizablePanelGroup
           direction="horizontal"
@@ -442,29 +433,20 @@ export function MailLayout() {
                       <Button
                         variant="outline"
                         className={cn(
-                          'text-muted-foreground border-border/40 bg-background/50 hover:bg-accent/30 focus-visible:ring-ring dark:border-border/20 dark:bg-background/40 relative flex h-10 flex-1 select-none items-center justify-start overflow-hidden rounded-lg border pl-3 text-left text-sm font-normal shadow-none ring-0 backdrop-blur-sm transition-all focus-visible:ring-2 focus-visible:ring-offset-2',
+                          'text-muted-foreground border-border/40 bg-background/50 hover:bg-accent/30 focus-visible:ring-ring dark:border-border/20 dark:bg-background/40 flex h-10 flex-1 select-none items-center justify-between overflow-hidden rounded-lg border px-3 text-left text-sm font-normal shadow-none ring-0 backdrop-blur-sm transition-all focus-visible:ring-2 focus-visible:ring-offset-2',
                         )}
                         onClick={handleOpenCommandPalette}
                       >
-                        <Search className="fill-muted-foreground h-4 w-4" />
+                        <div className="flex min-w-0 flex-1 items-center gap-2 pr-2">
+                          <Search className="fill-muted-foreground h-4 w-4 shrink-0" />
+                          <span className="truncate text-sm">
+                            {activeFilters.length > 0
+                              ? activeFilters.map((f) => f.display).join(', ')
+                              : 'Search'}
+                          </span>
+                        </div>
 
-                        <span className="ml-3 hidden truncate pr-20 lg:inline-block">
-                          {activeFilters.length > 0
-                            ? activeFilters.map((f) => f.display).join(', ')
-                            : 'Search'}
-                        </span>
-                        <span className="ml-3 inline-block truncate pr-20 lg:hidden">
-                          {activeFilters.length > 0
-                            ? `${activeFilters.length} filter${activeFilters.length > 1 ? 's' : ''}`
-                            : 'Search'}
-                        </span>
-
-                        <div className="absolute right-2 flex items-center gap-2">
-                          {/* {activeFilters.length > 0 && (
-                            <Badge variant="secondary" className="ml-2 h-5 rounded px-1">
-                              {activeFilters.length}
-                            </Badge>
-                          )} */}
+                        <div className="flex shrink-0 items-center gap-2">
                           {activeFilters.length > 0 && (
                             <Button
                               variant="secondary"
@@ -476,9 +458,7 @@ export function MailLayout() {
                             </Button>
                           )}
                           <kbd className="bg-muted border-border/40 dark:bg-muted/40 pointer-events-none hidden h-6 select-none items-center gap-1 rounded border px-2 text-xs font-medium opacity-80 sm:flex">
-                            <span className={cn('text-xs', isMac ? 'text-sm' : 'text-xs')}>
-                              {isMac ? '⌘' : 'Ctrl'}
-                            </span>
+                            <span className="text-sm font-sans">⌘</span>
                             <span className="text-xs">K</span>
                           </kbd>
                         </div>
@@ -758,17 +738,18 @@ function CategoryDropdown({ isMultiSelectMode }: CategoryDropdownProps) {
         <Button
           variant="outline"
           className={cn(
-            'text-muted-foreground border-border/40 bg-background/50 hover:bg-accent/30 dark:border-border/20 dark:bg-background/40 flex h-10 min-w-fit items-center gap-2 rounded-lg border px-3 backdrop-blur-sm transition-all',
+            'text-muted-foreground border-border/40 bg-background/50 hover:bg-accent/30 dark:border-border/20 dark:bg-background/40 flex h-10 items-center justify-center gap-1.5 rounded-lg border px-3 backdrop-blur-sm transition-all',
           )}
           aria-label="Filter by labels"
           aria-expanded={isOpen}
           aria-haspopup="menu"
         >
-          <span className="text-sm font-medium">
-            {labels.length > 0
-              ? `${labels.length} View${labels.length > 1 ? 's' : ''}`
-              : m['navigation.settings.categories']()}
-          </span>
+          <SlidersHorizontal className="h-4 w-4" />
+          {labels.length > 0 && (
+            <span className="bg-primary/20 text-primary rounded-full px-1.5 text-[11px] font-medium">
+              {labels.length}
+            </span>
+          )}
           <ChevronDown
             className={cn(
               'text-muted-foreground h-4 w-4 transition-transform duration-200',

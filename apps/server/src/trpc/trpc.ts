@@ -3,7 +3,6 @@ import { Ratelimit, type RatelimitConfig } from '@upstash/ratelimit';
 import type { HonoContext, HonoVariables } from '../ctx';
 import { getConnInfo } from 'hono/cloudflare-workers';
 import { initTRPC, TRPCError } from '@trpc/server';
-import { createLoggingMiddleware } from '../lib/trpc-logging';
 
 import { redis } from '../lib/services';
 import type { Context } from 'hono';
@@ -15,10 +14,8 @@ type TrpcContext = {
 
 const t = initTRPC.context<TrpcContext>().create({ transformer: superjson });
 
-const loggingMiddleware = createLoggingMiddleware();
-
 export const router = t.router;
-export const publicProcedure = t.procedure.use(loggingMiddleware);
+export const publicProcedure = t.procedure;
 
 export const privateProcedure = publicProcedure.use(async ({ ctx, next }) => {
   const { addRequestSpan, completeRequestSpan } = await import('../lib/trace-context');

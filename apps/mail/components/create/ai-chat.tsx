@@ -5,7 +5,6 @@ import useComposeEditor from '@/hooks/use-compose-editor';
 import { useRef, useCallback, useEffect } from 'react';
 import type { useAgentChat } from 'agents/ai-react';
 import { Markdown } from '@react-email/components';
-import { useBilling } from '@/hooks/use-billing';
 import { TextShimmer } from '../ui/text-shimmer';
 import { useThread } from '@/hooks/use-threads';
 import { MailLabels } from '../mail/mail-list';
@@ -15,7 +14,6 @@ import { VoiceButton } from '../voice-button';
 import { EditorContent } from '@tiptap/react';
 import { CurvedArrow } from '../icons/icons';
 import { Tools } from '../../types/tools';
-import { Button } from '../ui/button';
 import { format } from 'date-fns-tz';
 import { useQueryState } from 'nuqs';
 
@@ -72,12 +70,15 @@ const ThreadPreview = ({ threadId }: { threadId: string }) => {
 
 const ExampleQueries = ({ onQueryClick }: { onQueryClick: (query: string) => void }) => {
   const firstRowQueries = [
-    'Find all work meetings today',
-    'Label all emails from Github as OSS',
-    'Show recent Linear feedback',
+    'Summarize my last 24 hrs unread emails',
+    'Create a draft response to latest email',
+    'List all emails from [EMAIL_ADDRESS] this month',
   ];
 
-  const secondRowQueries = ['Find receipt from OpenAI', 'What Asana projects do I have coming up'];
+  const secondRowQueries = [
+    'Show emails with attachments',
+    'Search for urgent messages today',
+  ];
 
   return (
     <div className="relative mt-6 flex w-full max-w-xl flex-col items-center gap-2">
@@ -204,9 +205,7 @@ export function AIChat({
 }: ReturnType<typeof useAgentChat>): React.ReactElement {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const { chatMessages } = useBilling();
   const { isFullScreen } = useAIFullScreen();
-  const [, setPricingDialog] = useQueryState('pricingDialog');
   const [aiSidebarOpen] = useQueryState('aiSidebar');
   const { toggleOpen } = useAISidebar();
 
@@ -223,7 +222,7 @@ export function AIChat({
   }, [status, scrollToBottom]);
 
   const editor = useComposeEditor({
-    placeholder: 'Ask Zero to do anything...',
+    placeholder: 'Ask AxMail to do anything...',
     onLengthChange: () => setInput(editor.getText()),
     onKeydown(event) {
       if (event.key === '0' && event.metaKey) {
@@ -257,25 +256,30 @@ export function AIChat({
     }
   }, [aiSidebarOpen, editor]);
 
+  useEffect(() => {
+    const handleVoiceInput = (e: Event) => {
+      const customEvent = e as CustomEvent<{ text: string }>;
+      if (customEvent.detail?.text && editor) {
+        editor.commands.setContent(customEvent.detail.text);
+        setInput(customEvent.detail.text);
+        editor.commands.focus();
+      }
+    };
+
+    window.addEventListener('ai-chat-voice-input', handleVoiceInput);
+    return () => {
+      window.removeEventListener('ai-chat-voice-input', handleVoiceInput);
+    };
+  }, [editor, setInput]);
+
   return (
     <div className={cn('flex h-full flex-col', isFullScreen ? 'mx-auto max-w-xl' : '')}>
       <div className="no-scrollbar flex-1 overflow-y-auto" ref={messagesContainerRef}>
         <div className="min-h-full px-2 py-4">
-          {chatMessages && !chatMessages.enabled ? (
-            <div
-              onClick={() => setPricingDialog('true')}
-              className="absolute inset-0 flex flex-col items-center justify-center"
-            >
-              <TextShimmer className="text-center text-xl font-medium">
-                Upgrade to Zero Pro for unlimited AI chat
-              </TextShimmer>
-              <Button className="mt-2 h-8 w-52">Start 7 day free trial</Button>
-            </div>
-          ) : !messages.length ? (
+          {!messages.length ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <div className="relative mb-4 h-[44px] w-[44px]">
-                <img src="/black-icon.svg" alt="Zero Logo" className="dark:hidden" />
-                <img src="/white-icon.svg" alt="Zero Logo" className="hidden dark:block" />
+              <div className="relative mb-4 h-[48px] w-[48px]">
+                <img src="/ai-logo.png" alt="AxMail AI Logo" className="h-full w-full object-contain rounded-xl" />
               </div>
               <p className="mb-1 mt-2 hidden text-center text-sm font-medium text-black md:block dark:text-white">
                 Ask anything about your emails
@@ -394,7 +398,6 @@ export function AIChat({
                   form="ai-chat-form"
                   type="submit"
                   className="inline-flex cursor-pointer gap-1.5 rounded-lg"
-                  disabled={!chatMessages.enabled}
                 >
                   <div className="dark:bg[#141414] flex h-7 items-center justify-center gap-1 rounded-sm bg-[#262626] px-2 pr-1">
                     <CurvedArrow className="mt-1.5 h-4 w-4 fill-white dark:fill-[#929292]" />

@@ -253,81 +253,6 @@ export const createDefaultWorkflows = (): WorkflowEngine => {
     ],
   };
 
-  const vectorizationWorkflow: WorkflowDefinition = {
-    name: 'message-vectorization',
-    description: 'Vectorizes thread messages for search and analysis',
-    steps: [
-      {
-        id: 'find-messages-to-vectorize',
-        name: 'Find Messages to Vectorize',
-        description: 'Identifies messages that need vectorization',
-        enabled: true,
-        action: workflowFunctions.findMessagesToVectorize,
-      },
-      {
-        id: 'vectorize-messages',
-        name: 'Vectorize Messages',
-        description: 'Converts messages to vector embeddings',
-        enabled: true,
-        action: workflowFunctions.vectorizeMessages,
-      },
-      {
-        id: 'upsert-embeddings',
-        name: 'Upsert Embeddings',
-        description: 'Saves vector embeddings to the database',
-        enabled: true,
-        action: workflowFunctions.upsertEmbeddings,
-        errorHandling: 'continue',
-      },
-      {
-        id: 'cleanup-workflow-execution',
-        name: 'Cleanup Workflow Execution',
-        description: 'Removes workflow execution tracking',
-        enabled: true,
-        action: workflowFunctions.cleanupWorkflowExecution,
-        errorHandling: 'continue',
-      },
-    ],
-  };
-
-  const threadSummaryWorkflow: WorkflowDefinition = {
-    name: 'thread-summary',
-    description: 'Generates and stores thread summaries',
-    steps: [
-      {
-        id: 'check-existing-summary',
-        name: 'Check Existing Summary',
-        description: 'Checks if a thread summary already exists',
-        enabled: true,
-        action: workflowFunctions.checkExistingSummary,
-      },
-      {
-        id: 'generate-thread-summary',
-        name: 'Generate Thread Summary',
-        description: 'Generates a summary of the thread',
-        enabled: true,
-        action: workflowFunctions.generateThreadSummary,
-        errorHandling: 'continue',
-      },
-      {
-        id: 'upsert-thread-summary',
-        name: 'Upsert Thread Summary',
-        description: 'Saves thread summary to the database',
-        enabled: true,
-        action: workflowFunctions.upsertThreadSummary,
-        errorHandling: 'continue',
-      },
-      //   {
-      //     id: 'cleanup-workflow-execution',
-      //     name: 'Cleanup Workflow Execution',
-      //     description: 'Removes workflow execution tracking',
-      //     enabled: true,
-      //     action: workflowFunctions.cleanupWorkflowExecution,
-      //     errorHandling: 'continue',
-      //   },
-    ],
-  };
-
   const labelGenerationWorkflow: WorkflowDefinition = {
     name: 'label-generation',
     description: 'Generates and applies labels to threads',
@@ -374,8 +299,6 @@ export const createDefaultWorkflows = (): WorkflowEngine => {
   };
 
   engine.registerWorkflow(autoDraftWorkflow);
-  engine.registerWorkflow(vectorizationWorkflow);
-  engine.registerWorkflow(threadSummaryWorkflow);
   engine.registerWorkflow(labelGenerationWorkflow);
 
   return engine;

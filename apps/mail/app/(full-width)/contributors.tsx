@@ -388,12 +388,12 @@ export default function OpenPage() {
                   <div className="relative h-8 w-8">
                     <img
                       src="/black-icon.svg"
-                      alt="0.email Logo"
+                      alt="AxMail Logo"
                       className="object-contain dark:hidden"
                     />
                     <img
                       src="/white-icon.svg"
-                      alt="0.email Logo"
+                      alt="AxMail Logo"
                       className="hidden object-contain dark:block"
                     />
                   </div>
@@ -665,7 +665,7 @@ export default function OpenPage() {
             <h1 className="text-3xl font-semibold tracking-tight text-neutral-900/80 dark:text-white">
               Core Team
             </h1>
-            <p className="text-muted-foreground mt-2">Meet the people behind 0.email</p>
+            <p className="text-muted-foreground mt-2">Meet the people behind AxMail</p>
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -751,7 +751,7 @@ export default function OpenPage() {
               Contributors
             </h1>
             <div className="text-muted-foreground mt-2 flex items-center justify-center gap-2">
-              <span>Thank you to all the contributors who have helped make 0.email possible</span>
+              <span>Thank you to all the contributors who have helped make AxMail possible</span>
             </div>
           </div>
 

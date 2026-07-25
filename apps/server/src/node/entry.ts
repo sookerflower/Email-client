@@ -14,6 +14,11 @@
 import { serve } from '@hono/node-server';
 import { app } from '../main';
 import { env } from '../env';
+import { registerRealtimeRoutes } from './realtime';
+
+// Phase 5 §8b: SSE beacon relay, registered here so ioredis and the
+// subscriber stay out of the workerd bundle.
+registerRealtimeRoutes(app);
 
 /** workerd ExecutionContext equivalent: fire-and-forget with error logging. */
 const executionCtx = {

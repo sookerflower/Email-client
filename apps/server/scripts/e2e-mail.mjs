@@ -40,6 +40,13 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import nodemailer from 'nodemailer';
+import { Agent, setGlobalDispatcher } from 'undici';
+
+// undici's default headersTimeout is 300 s; a non-streaming tRPC response
+// (forceSync on the real server: 2–4+ min, growing with mailbox size) sends
+// headers only when the handler resolves — the intermittent "fetch failed"
+// was the client timing out, not the server failing.
+setGlobalDispatcher(new Agent({ headersTimeout: 900_000, bodyTimeout: 900_000 }));
 
 const REAL = process.argv.includes('--real');
 const SKIP_IDLE = process.argv.includes('--skip-idle');

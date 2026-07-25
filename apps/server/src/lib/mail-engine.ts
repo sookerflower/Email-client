@@ -21,6 +21,7 @@ import { redis } from './services';
 import type { IGetThreadResponse, IGetThreadsResponse, MailManager } from './driver/types';
 import type { ParsedMessage } from '../types';
 import { getThreadBlobStore, threadBlobKey } from './blob-store';
+import { publishBeacon } from './beacons';
 import { OutgoingMessageType } from '../routes/agent/types';
 import type { connection as connectionSchema } from '../db/schema';
 import type { CreateDraftData } from './schemas';
@@ -80,12 +81,15 @@ export class MailEngine {
   }
 
   /**
-   * Realtime invalidation hook. Phase 5 replaces this with publishBeacon()
-   * (Redis pub/sub -> SSE); until then it only logs so callers keep their
-   * shape without a WS layer on Node.
+   * Realtime invalidation hook (Phase 5 §8b): publishes to Redis pub/sub;
+   * the Node-only SSE layer (src/node/realtime.ts) relays to clients.
+   * Fire-and-forget by design — a lost ping costs latency, never
+   * correctness. Call sites MUST sit after the awaited write they announce
+   * (publish-after-commit); this method being sync keeps that property:
+   * the publish starts strictly after the preceding awaits resolved.
    */
   broadcast(message: BroadcastMessage) {
-    console.debug(`[MailEngine:${this.connectionId}] beacon (pending Phase 5):`, message.type);
+    void publishBeacon(this.connectionId, message);
   }
 
   async reloadFolder(folder: string) {

@@ -18,6 +18,7 @@
  *   WORKER_WATCHERS                   'lease' (default) | 'always' | 'never'
  *   REDIS_URL / REDIS_TOKEN           lease store (WORKER_WATCHERS=lease)
  *   WORKER_ID                         lease holder label (default pid)
+ *   QUEUE_REDIS_URL                   BullMQ Redis TCP url (default redis://127.0.0.1:6379)
  *
  * Run: node dist-node/worker.mjs   (built by src/node/build.mjs)
  */
@@ -25,6 +26,7 @@ import { join } from 'node:path';
 
 import { startMailWorker } from './core';
 import { startLeaderLease } from './leader-lease';
+import { startJobRuntime, type JobRuntime } from './jobs';
 
 // The worker runs bundled (dist-node/worker.mjs) with cwd = apps/server, so
 // paths resolve from cwd, not import.meta.url.
@@ -57,6 +59,15 @@ const worker = startMailWorker({
   legacyLabelStorePath: join(process.cwd(), 'imap-sidecar', '.label-store.json'),
 });
 
+let jobs: JobRuntime | null = null;
+startJobRuntime()
+  .then((runtime) => {
+    jobs = runtime;
+  })
+  .catch((error) => {
+    console.error('[worker] BullMQ job runtime failed to start:', (error as Error).message);
+  });
+
 let lease: Awaited<ReturnType<typeof startLeaderLease>> | null = null;
 
 if (WATCHER_MODE === 'lease') {
@@ -83,6 +94,7 @@ if (WATCHER_MODE === 'lease') {
 const shutdown = async (signal: string) => {
   console.log(`[worker:${WORKER_ID}] ${signal} — shutting down`);
   await lease?.release().catch(() => undefined);
+  await jobs?.close().catch(() => undefined);
   await worker.close();
   process.exit(0);
 };

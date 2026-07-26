@@ -161,16 +161,56 @@ with the incidents and verification numbers. Read it before doing anything.
     in code.
 
 ## How to run / verify (Windows, Node 22)
-- Build both bundles: `node src/node/build.mjs` (from `apps/server`).
-- Run: `node dist-node/worker.mjs` (port 8791, MUST be up first — owns IMAP)
-  then `node dist-node/server.mjs` (port 8787). Kill stale listeners on
-  8787/8791 before restarting; a stale process answering /health has masked
-  real failures before.
+
+### Full local start, in order (GreenMail — no real mail server touched)
+```bash
+# 1. Datastores: Postgres 5432, Valkey 6379, Upstash-REST proxy 8079
+pnpm docker:db:up                                  # repo root
+
+# 2. GreenMail test mail server (NOT in the compose file — standalone)
+docker start greenmail-test || docker run -d --name greenmail-test \
+  -p 3025:3025 -p 3143:3143 \
+  -e GREENMAIL_OPTS='-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.auth.disabled' \
+  greenmail/standalone:2.1.3
+
+# 3. Schema (drizzle.config.ts reads process.env.DATABASE_URL DIRECTLY —
+#    it does NOT load .dev.vars/.env, so export it for this command)
+cd apps/server
+DATABASE_URL="postgresql://postgres:postgres@localhost:5432/zerodotemail" pnpm db:migrate
+
+# 4. Build both bundles, then WORKER FIRST (owns every IMAP socket)
+pnpm build:node                                    # -> dist-node/{server,worker}.mjs
+pnpm worker                                        # :8791 — leave running
+pnpm dev                                           # :8787 — separate terminal (rebuilds + serves)
+
+# 5. Client
+cd ../mail && pnpm dev                             # :3000
+```
+`pnpm go` / `pnpm dev` at the repo root do NOT start the worker (turbo's
+dev pipeline covers api + client only) — start `pnpm worker` yourself or
+mail never syncs. Kill stale listeners on 8787/8791 before restarting; a
+stale process answering /health has masked real failures before.
+
+**The login form defaults to the REAL server**, not GreenMail:
+`IMAP_DEFAULT_*` in `.dev.vars` point at m.re.cx. For a GreenMail-only
+session, type the overrides in the login form (host `127.0.0.1`, IMAP
+3143 / SMTP 3025, any credentials — auth is disabled) or repoint
+`IMAP_DEFAULT_*`. Only the E2E scripts default to GreenMail.
+
+**Env sources** (both gitignored, same key set): `apps/server/.dev.vars`
+is read by `src/env.ts` for the **api**; repo-root `.env` is what the
+**worker** loads (`src/worker/index.ts`, when `IMAP_SIDECAR_SECRET` is
+absent from the environment) — keep the two in sync. `apps/mail/.env`
+supplies the client's `VITE_PUBLIC_BACKEND_URL`. Worker-critical keys:
+`IMAP_SIDECAR_SECRET`, `IMAP_ENCRYPTION_KEY`, `DATABASE_URL`, `REDIS_URL`,
+`REDIS_TOKEN` (+ `QUEUE_REDIS_URL`, defaulted to redis://127.0.0.1:6379).
+
+### Verify
 - **E2E (the verification standard)**: `node scripts/e2e-mail.mjs`
   (GreenMail) and `--real` (m.re.cx; it ban-probes first). All legs must be
   green after every change. Regression test:
   `npx vitest run --config vitest.integration.config.ts`.
-- tsc baselines (must not increase): **server 7, mail 230** (re-baselined at
+- tsc baselines (must not increase): **server 7, mail 231** (re-baselined at
   6.4 close after the CF types left the tree; `npx tsc --noEmit`, count
   `error TS` lines; both apps have pre-existing upstream errors — judge by
   delta).

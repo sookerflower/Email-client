@@ -321,9 +321,11 @@ await leg('sent-sync', async () => {
   await queue.add('sync-folder', { connectionId, folder: 'sent' });
   await queue.close();
 
-  // Real-server window: the sent job serializes behind any in-flight inbox
-  // sync for the account (~2 min under full-refetch).
-  const sentWindowMs = REAL ? 240_000 : 90_000;
+  // Real-server window, tightened after the 6.2 ladder: steady-state syncs
+  // run 0.5–7 s (condstore); the worst case is a one-off full resync
+  // (~60–70 s on a cleaned mailbox) right after the suite's forceSync
+  // cleared the cursors. 120 s = ~2x that.
+  const sentWindowMs = REAL ? 120_000 : 90_000;
   const deadline = Date.now() + sentWindowMs;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 3000));
@@ -352,11 +354,10 @@ if (SKIP_IDLE) {
     // Assert on the ARRIVAL OF THE MESSAGE ITSELF (newest-first ordering puts
     // it on page 1), not on a count — counts saturate at one page and go
     // stale on mailboxes with more threads than the page size.
-    // Real-server window covers the worst case under full-refetch sync: a
-    // mid-flight inbox job whose listing predates the message must finish
-    // (~100 s) before the dirty-flag re-enqueue syncs the new arrival.
-    // Incremental sync (next work item) will let this tighten again.
-    const windowMs = REAL ? 240_000 : 90_000;
+    // Real-server window, tightened after the 6.2 ladder (was 240 s under
+    // full-refetch): a mid-flight sync + the dirty-flag re-enqueue are now
+    // seconds each; the 120 s margin covers a stray one-off full resync.
+    const windowMs = REAL ? 120_000 : 90_000;
     const deadline = Date.now() + windowMs;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 3000));

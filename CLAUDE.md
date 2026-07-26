@@ -67,11 +67,12 @@ with the incidents and verification numbers. Read it before doing anything.
   as one burst; fixing that proxy is outside this repo.
 
 - **Phase 6 — hardening/cutover, IN PROGRESS.** Order (confirmed with user,
-  correctness before speed): 6.1 UIDVALIDITY guard (done) → 6.2 incremental
-  ladder (done) → 6.3 connection-discipline audit (done) → 6.4 workerd
-  deletion + repo hygiene (done) → **6.5 fresh-mailbox resync drill (NEXT —
-  closes Phase 6)**. Each step: report, hold for user go, commit+push on
-  close.
+  correctness before speed): 6.1 UIDVALIDITY guard → 6.2 incremental ladder
+  → 6.3 connection-discipline audit → 6.4 workerd deletion + repo hygiene →
+  6.5 fresh-mailbox resync drill — **ALL DONE. PHASE 6 IS CLOSED; the
+  migration is complete.** What remains is deployment/ops (real TLS cert on
+  the mail server, ws.re.cx SSE buffering, model choice for chat) and the
+  paused rebrand — product decisions, not migration work.
   - **6.1 (closed)**: `MailManager.getFolderState` (optional; IMAP driver +
     proxy implement it) + `syncFolderJob` compares server `uidValidity` to
     `folder_sync_state` before every sync. On change: purge folder-labeled

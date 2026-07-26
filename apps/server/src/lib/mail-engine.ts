@@ -732,8 +732,14 @@ export class MailEngine {
       if (!next || Number(next) >= maxTotal) {
         // Completed full run: rebuild the UID ledger from a window snapshot
         // (the incremental path's deletion detection depends on it) and
-        // record the cursor this sync was built against. Snapshot failure
-        // degrades to cursor-from-STATUS — the next sync just runs full.
+        // record the cursor this sync was built against. The cursor uses
+        // the PRE-LISTING folder state (probed at sync start) with the
+        // post-sync snapshot only as fallback: a message arriving between
+        // the listing and the snapshot would otherwise be ledgered with the
+        // cursor advanced past it and NEVER INDEXED — observed live in the
+        // 6.5 fresh-resync drill (probe uid in ledger, uid_next beyond it,
+        // no thread row). An older cursor merely re-fetches the tail on the
+        // next incremental; upserts are idempotent.
         const snapshot = await this.driver
           .fetchFolderDelta?.(folder, null, maxTotal)
           .catch(() => null);
@@ -742,12 +748,12 @@ export class MailEngine {
         }
         await upsertFolderSyncState(this.connectionId, folder, {
           uidValidity:
-            snapshot?.newCursor.uidValidity ??
             folderState?.uidValidity ??
+            snapshot?.newCursor.uidValidity ??
             stored?.uidValidity ??
             null,
-          uidNext: snapshot?.newCursor.uidNext ?? folderState?.uidNext ?? null,
-          highestModseq: snapshot?.newCursor.highestModseq ?? folderState?.highestModseq ?? null,
+          uidNext: folderState?.uidNext ?? snapshot?.newCursor.uidNext ?? null,
+          highestModseq: folderState?.highestModseq ?? snapshot?.newCursor.highestModseq ?? null,
           pageToken: null,
           lastSyncedAt: new Date(),
           resyncCount: guardTripped ? resyncCount : 0,
@@ -855,6 +861,10 @@ export class MailEngine {
     // with the index, or the next incremental sync would see "no changes"
     // against an empty index and leave it empty.
     await clearFolderSyncData(this.connectionId);
+    // Pre-listing folder state, captured BEFORE the sync pass: the recorded
+    // cursor must never be newer than the listing it was built from (the
+    // mid-sync-arrival residual, same as syncFolderJob's completion block).
+    const preState = (await this.driver.getFolderState?.('inbox').catch(() => null)) ?? null;
     await this.syncFolders();
     // Record the cursor this resync was built against (Phase 6.3). Leaving
     // folder_sync_state empty until the next JOB sync both forfeits the 6.2
@@ -862,29 +872,31 @@ export class MailEngine {
     // cursor writes — observed live: listThreads' empty-inbox async
     // forceReSync deleted the validity row a watcher-triggered job sync had
     // just recorded, so a read in between saw no cursor at all.
-    await this.recordFullSyncCursor('inbox');
+    await this.recordFullSyncCursor('inbox', preState);
   }
 
   /**
    * Persist the cursor + UID ledger for a folder that a full sync pass just
    * covered — the same completion bookkeeping syncFolderJob does, for the
-   * api-process full-resync path. Snapshot failure degrades to
-   * cursor-from-STATUS; the next sync just runs full.
+   * api-process full-resync path. `preState` (folder state probed BEFORE
+   * the listing) takes precedence so mid-sync arrivals stay ABOVE the
+   * recorded cursor; snapshot failure degrades to cursor-from-preState —
+   * the next sync just runs full.
    */
-  private async recordFullSyncCursor(folder: string): Promise<void> {
+  private async recordFullSyncCursor(
+    folder: string,
+    preState: Awaited<ReturnType<NonNullable<MailManager['getFolderState']>>> | null,
+  ): Promise<void> {
     const snapshot = await this.driver
       .fetchFolderDelta?.(folder, null, maxSyncCount())
       .catch(() => null);
     if (snapshot) {
       await replaceFolderLedger(this.connectionId, folder, snapshot.messages);
     }
-    const folderState = snapshot
-      ? null
-      : ((await this.driver.getFolderState?.(folder).catch(() => null)) ?? null);
     await upsertFolderSyncState(this.connectionId, folder, {
-      uidValidity: snapshot?.newCursor.uidValidity ?? folderState?.uidValidity ?? null,
-      uidNext: snapshot?.newCursor.uidNext ?? folderState?.uidNext ?? null,
-      highestModseq: snapshot?.newCursor.highestModseq ?? folderState?.highestModseq ?? null,
+      uidValidity: preState?.uidValidity ?? snapshot?.newCursor.uidValidity ?? null,
+      uidNext: preState?.uidNext ?? snapshot?.newCursor.uidNext ?? null,
+      highestModseq: preState?.highestModseq ?? snapshot?.newCursor.highestModseq ?? null,
       pageToken: null,
       lastSyncedAt: new Date(),
       resyncCount: 0,

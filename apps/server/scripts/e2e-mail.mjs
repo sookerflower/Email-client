@@ -354,10 +354,14 @@ if (SKIP_IDLE) {
     // Assert on the ARRIVAL OF THE MESSAGE ITSELF (newest-first ordering puts
     // it on page 1), not on a count — counts saturate at one page and go
     // stale on mailboxes with more threads than the page size.
-    // Real-server window, tightened after the 6.2 ladder (was 240 s under
-    // full-refetch): a mid-flight sync + the dirty-flag re-enqueue are now
-    // seconds each; the 120 s margin covers a stray one-off full resync.
-    const windowMs = REAL ? 120_000 : 90_000;
+    // Real-server window: 240 s. The 6.2 close measured 14 s and tightened
+    // this to 120 s, but m.re.cx SMTP self-delivery alone ran 100–130 s
+    // across 2026-07-26 (two border-line failures with the app machinery
+    // provably clean: notifies fired, incremental syncs ran, the message
+    // synced seconds after the deadline). The window tolerates the mail
+    // server's out-of-band delivery latency; the assertion itself — arrival
+    // with NO manual sync — is unchanged.
+    const windowMs = REAL ? 240_000 : 90_000;
     const deadline = Date.now() + windowMs;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 3000));
@@ -719,6 +723,141 @@ await leg('census-login-churn', async () => {
       `duplicate sockets after re-logins: driver=${acctAfter.open.driver} watcher=${acctAfter.open.watcher}`,
     );
   return `2 re-logins: watcher opens +${watcherDelta}, driver opens +${driverDelta}, open now driver=${acctAfter.open.driver} watcher=${acctAfter.open.watcher}`;
+});
+
+await leg('midsync-arrival', async () => {
+  // Phase 6.5 regression guard — a TIMING bug needs a timed repro. A full
+  // sync used to record its cursor from a snapshot taken AFTER the listing;
+  // a message arriving in between was ledgered with the cursor advanced
+  // past it and NEVER indexed — and no later incremental could see it
+  // (uid-diff starts above its uid, condstore starts above its modseq, and
+  // nothing reconciles ledger-vs-index). Silent mail-invisibility on the
+  // from-empty first-run path. The fix records the PRE-LISTING folder
+  // state as the cursor, so a mid-sync arrival stays above it and the next
+  // incremental indexes it. This leg races a delivery into the middle of a
+  // running forceSync and asserts visibility within ONE further sync cycle.
+  const result = await trpc('connections.list', { query: null });
+  const all = result?.connections ?? [];
+  const connectionId = (all.find((c) => c.email === mode.email) ?? all[0])?.id;
+  if (!connectionId) throw new Error('no connection id');
+
+  // The repro must match the observed mechanism exactly: a JOB full sync
+  // whose page-1 listing predates the arrival, with the arrival's notify
+  // collapsing into the 4.2 dirty-flag (job already active) so the trailing
+  // sync runs INCREMENTAL against the job's completion cursor. An api-side
+  // forceSync race does NOT reproduce it — its cursor wipe makes the
+  // notify-spawned job run full and rescue the message (observed: the
+  // first version of this leg passed on pre-fix code).
+  //
+  // GreenMail syncs are fast — widen the job's window by seeding the inbox
+  // so its full listing takes ~10s. The real mailbox is slow on its own.
+  if (!REAL) {
+    const transporter = nodemailer.createTransport(mode.smtp);
+    for (let i = 0; i < 50; i++) {
+      await transporter.sendMail({
+        from: mode.email,
+        to: mode.email,
+        subject: `e2e midseed ${runId} ${i}`,
+        html: `<p>seed</p>`,
+      });
+    }
+    transporter.close();
+  }
+
+  // Force the next JOB sync onto the full path: drop the inbox cursor and
+  // ledger for this connection (index left intact — the full sync re-upserts).
+  const postgres = (await import('postgres')).default;
+  const sql = postgres(devVars.DATABASE_URL, { max: 1 });
+  try {
+    await sql`DELETE FROM mail0_folder_sync_state WHERE connection_id = ${connectionId} AND folder = 'inbox'`;
+    await sql`DELETE FROM mail0_folder_message WHERE connection_id = ${connectionId} AND folder = 'inbox'`;
+  } finally {
+    await sql.end();
+  }
+
+  // Start the job, let it list page 1 (newest-first, listed first), then
+  // land the probe while the job is still mid-run.
+  const probeSubject = `e2e midsync ${runId}`;
+  await enqueueInboxSync(connectionId);
+  await new Promise((r) => setTimeout(r, REAL ? 30_000 : 4000));
+  await sendRawSmtp(probeSubject);
+
+  // The probe's own notify hits the jobId dedup (job active) -> dirty-flag
+  // trailing re-enqueue -> trailing sync runs incremental against the
+  // job's recorded cursor. Pre-fix that cursor post-dated the probe
+  // (snapshot taken after the listing) and the probe stayed invisible
+  // FOREVER; post-fix the cursor is the pre-listing state, so the trailing
+  // incremental indexes it. Window covers job completion + the trailing
+  // cycle.
+  const windowMs = REAL ? 360_000 : 90_000;
+  const deadline = Date.now() + windowMs;
+  let visible = false;
+  while (Date.now() < deadline) {
+    if (await subjectInInbox(probeSubject, 25)) {
+      visible = true;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+
+  // Self-clean the GreenMail seeds (best-effort): a run that aborts after
+  // this leg must not leave 50 same-timestamp threads behind — they push
+  // the inbox past the 50-thread snapshot page and same-timestamp ordering
+  // ties flake the equivalence oracle on the NEXT run (observed live). On
+  // --real there are no seeds; the cleanup leg removes the probe.
+  if (!REAL) {
+    const rpcAuth = {
+      userId: 'e2e-midsync-clean',
+      accessToken: '',
+      refreshToken: '',
+      email: mode.email,
+      imap: {
+        imapHost: '127.0.0.1',
+        imapPort: 3143,
+        imapSecure: false,
+        smtpHost: '127.0.0.1',
+        smtpPort: 3025,
+        smtpSecure: false,
+        username: mode.email,
+        password: mode.password,
+      },
+    };
+    const rpc = async (method, args) => {
+      const res = await fetch(`${SIDECAR}/rpc`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-imap-sidecar-secret': devVars.IMAP_SIDECAR_SECRET,
+        },
+        body: JSON.stringify({ method, args, auth: rpcAuth }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(`${method}: ${body.error}`);
+      return body.result;
+    };
+    try {
+      for (let page = 0; page < 3; page++) {
+        const listing = await rpc('list', [{ folder: 'inbox', maxResults: 50 }]);
+        const targets = (listing.threads ?? []).filter((t) =>
+          (t.$raw?.subject ?? '').startsWith(`e2e midseed ${runId}`),
+        );
+        if (!targets.length) break;
+        for (const t of targets) {
+          await rpc('delete', [t.id]).catch(() => undefined);
+        }
+      }
+      await enqueueInboxSync(connectionId);
+    } catch {
+      // best-effort — drop-recover's GreenMail restart wipes the rest
+    }
+  }
+
+  if (!visible) {
+    throw new Error(
+      `mid-sync arrival "${probeSubject}" NOT visible ${windowMs / 1000}s after the full job sync — ledgered-but-unindexed regression`,
+    );
+  }
+  return `mid-sync arrival "${probeSubject}" visible within one sync cycle of the job`;
 });
 
 if (REAL) {

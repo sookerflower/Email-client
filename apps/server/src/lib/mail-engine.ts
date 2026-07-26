@@ -14,6 +14,9 @@ import {
   upsertThread,
   getFolderSyncPageToken,
   setFolderSyncPageToken,
+  getFolderSyncRow,
+  upsertFolderSyncState,
+  listThreadIdsByLabel,
   type IndexLabel,
 } from './mail-index';
 import { generateWhatUserCaresAbout, type UserTopic } from './analyze/interests';
@@ -513,6 +516,69 @@ export class MailEngine {
     const pageSize = 20;
     const maxTotal = maxSyncCount();
     const folderLabel = this.normalizeFolderName(folder).toUpperCase();
+
+    // ------------------------------------------------------------------
+    // UIDVALIDITY guard (Phase 6.1, MIGRATION-PLAN §9.1). A validity
+    // change means every cached UID for this folder may point at a
+    // DIFFERENT message — the one failure mode that corrupts caches
+    // silently. On change: purge the folder's threads (index + blobs),
+    // discard all cached sync state, and resync from scratch. Runs before
+    // the incremental ladder (6.2) exists so the ladder is born safe.
+    // ------------------------------------------------------------------
+    const folderState = await this.driver.getFolderState?.(folder).catch((error) => {
+      // State probe failure must not block sync; the guard just can't
+      // engage this round (full-refetch semantics stay safe regardless).
+      console.warn(
+        `[MailEngine:${this.connectionId}] getFolderState(${folder}) failed:`,
+        (error as Error).message,
+      );
+      return null;
+    });
+    const stored = await getFolderSyncRow(this.connectionId, folder);
+    let guardTripped = false;
+    let resyncCount = 0;
+    if (
+      folderState?.uidValidity != null &&
+      stored?.uidValidity != null &&
+      stored.uidValidity !== folderState.uidValidity
+    ) {
+      // Flap protection (the Nylas lesson): consecutive validity-triggered
+      // resyncs are capped; the counter ages out after an hour of quiet.
+      const staleWindow = Date.now() - new Date(stored.updatedAt).getTime() > 60 * 60 * 1000;
+      const attempts = staleWindow ? 0 : (stored.resyncCount ?? 0);
+      const MAX_VALIDITY_RESYNCS = 3;
+      if (attempts >= MAX_VALIDITY_RESYNCS) {
+        throw new Error(
+          `UIDVALIDITY for ${folder} is flapping (${stored.uidValidity} -> ${folderState.uidValidity}, ` +
+            `${attempts} consecutive resyncs) — refusing to resync-loop; will retry after the cooldown window`,
+        );
+      }
+      guardTripped = true;
+      resyncCount = attempts + 1;
+      console.warn(
+        `[MailEngine:${this.connectionId}] UIDVALIDITY changed for ${folder}: ` +
+          `${stored.uidValidity} -> ${folderState.uidValidity} — purging folder cache, full resync (${resyncCount}/${MAX_VALIDITY_RESYNCS})`,
+      );
+      const staleThreadIds = await listThreadIdsByLabel(this.connectionId, folderLabel);
+      for (const threadId of staleThreadIds) {
+        await deleteIndexedThread(this.connectionId, threadId);
+        await getThreadBlobStore()
+          .delete(threadBlobKey(this.connectionId, threadId))
+          .catch(() => undefined);
+      }
+      // Persist the new validity and wipe cached cursors BEFORE syncing so
+      // a mid-sync retry doesn't re-trip the guard (and re-purge).
+      await upsertFolderSyncState(this.connectionId, folder, {
+        uidValidity: folderState.uidValidity,
+        uidNext: null,
+        highestModseq: null,
+        pageToken: null,
+        resyncCount,
+      });
+      console.log(
+        `[MailEngine:${this.connectionId}] purged ${staleThreadIds.length} ${folderLabel} thread(s) after UIDVALIDITY change`,
+      );
+    }
     // Resume only applies to a RETRY of the same job. A fresh job honoring a
     // stale checkpoint (left by a job that exhausted its retries or died
     // with the process) would start mid-listing and skip the newest page —
@@ -565,7 +631,18 @@ export class MailEngine {
 
       const next = listing.nextPageToken ?? null;
       if (!next || Number(next) >= maxTotal) {
-        await setFolderSyncPageToken(this.connectionId, folder, null);
+        // Completed run: record the folder state this sync was built
+        // against (the guard's comparison point next time) and clear the
+        // flap counter — a successful sync under a stable validity is the
+        // "not flapping" signal.
+        await upsertFolderSyncState(this.connectionId, folder, {
+          uidValidity: folderState?.uidValidity ?? stored?.uidValidity ?? null,
+          uidNext: folderState?.uidNext ?? null,
+          highestModseq: folderState?.highestModseq ?? null,
+          pageToken: null,
+          lastSyncedAt: new Date(),
+          resyncCount: guardTripped ? resyncCount : 0,
+        });
         break;
       }
       await setFolderSyncPageToken(this.connectionId, folder, next);

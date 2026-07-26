@@ -535,6 +535,13 @@ export const folderSyncState = createTable(
     highestModseq: text('highest_modseq'),
     pageToken: text('page_token'),
     lastSyncedAt: timestamp('last_synced_at'),
+    /**
+     * Consecutive UIDVALIDITY-triggered full resyncs (Phase 6.1). Reset to
+     * 0 by any successful sync with a stable validity; when it hits the cap
+     * the folder degrades loudly instead of resync-looping on a flapping
+     * server (the Nylas lesson).
+     */
+    resyncCount: integer('resync_count').notNull().default(0),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },

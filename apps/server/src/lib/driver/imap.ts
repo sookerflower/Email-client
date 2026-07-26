@@ -338,6 +338,36 @@ export class ImapSmtpMailManager implements MailManager {
   // list / get
   // ------------------------------------------------------------------
 
+  /**
+   * Folder state for the UIDVALIDITY guard / incremental sync (Phase 6).
+   * Uses STATUS so the connection's selected mailbox is untouched.
+   */
+  public getFolderState(folder: string) {
+    return this.withErrorHandler(
+      'getFolderState',
+      async () => {
+        const path = await this.resolveFolder(this.folderKindFromZeroName(folder));
+        if (!path) return null;
+        const client = await this.connect();
+        const status = await client.status(path, {
+          uidValidity: true,
+          uidNext: true,
+          highestModseq: true,
+          messages: true,
+        });
+        return {
+          folder,
+          path,
+          uidValidity: status.uidValidity != null ? Number(status.uidValidity) : null,
+          uidNext: status.uidNext != null ? Number(status.uidNext) : null,
+          highestModseq: status.highestModseq != null ? String(status.highestModseq) : null,
+          messages: status.messages ?? null,
+        };
+      },
+      { folder, email: this.config.auth.email },
+    );
+  }
+
   public list(params: {
     folder: string;
     query?: string;
@@ -698,9 +728,24 @@ export class ImapSmtpMailManager implements MailManager {
           ...(mailOptions.bcc ?? []),
         ];
         await this.smtpSend(mailOptions.from, recipients, raw);
-        await this.appendToSent(raw).catch((error) =>
-          console.warn('[ImapSmtpMailManager] append to Sent failed:', (error as Error).message),
-        );
+        await this.appendToSent(raw).catch(async (error) => {
+          // The SMTP send succeeded, so this failure must never throw — but
+          // a dead cached IMAP connection silently losing the Sent copy is
+          // exactly the failure class the /rpc reconnect retry can't see
+          // (nothing threw at the /rpc level). One fresh-connection retry
+          // before conceding (Phase 6.1 hardening, observed live).
+          console.warn(
+            '[ImapSmtpMailManager] append to Sent failed, retrying on a fresh connection:',
+            (error as Error).message,
+          );
+          await this.dispose().catch(() => undefined);
+          await this.appendToSent(raw).catch((retryError) =>
+            console.warn(
+              '[ImapSmtpMailManager] append to Sent failed:',
+              (retryError as Error).message,
+            ),
+          );
+        });
         return { id: normalizeMessageId(messageId) ?? null };
       },
       { email: this.config.auth.email },

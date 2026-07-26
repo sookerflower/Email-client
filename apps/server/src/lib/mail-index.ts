@@ -339,6 +339,53 @@ export const findThreads = async (
 // progress" (the last run completed).
 // ---------------------------------------------------------------------------
 
+export type FolderSyncRow = typeof folderSyncState.$inferSelect;
+
+/** Full per-folder sync-state row (Phase 6.1 guard + 6.2 ladder). */
+export const getFolderSyncRow = async (
+  connectionId: string,
+  folder: string,
+): Promise<FolderSyncRow | undefined> => {
+  return await db().query.folderSyncState.findFirst({
+    where: and(
+      eq(folderSyncState.connectionId, connectionId),
+      eq(folderSyncState.folder, folder),
+    ),
+  });
+};
+
+export const upsertFolderSyncState = async (
+  connectionId: string,
+  folder: string,
+  values: Partial<
+    Pick<
+      FolderSyncRow,
+      'uidValidity' | 'uidNext' | 'highestModseq' | 'pageToken' | 'lastSyncedAt' | 'resyncCount'
+    >
+  >,
+): Promise<void> => {
+  const now = new Date();
+  await db()
+    .insert(folderSyncState)
+    .values({ connectionId, folder, ...values, updatedAt: now })
+    .onConflictDoUpdate({
+      target: [folderSyncState.connectionId, folderSyncState.folder],
+      set: { ...values, updatedAt: now },
+    });
+};
+
+/** Thread ids carrying a folder label — the purge set for a UIDVALIDITY change. */
+export const listThreadIdsByLabel = async (
+  connectionId: string,
+  labelId: string,
+): Promise<string[]> => {
+  const rows = await db()
+    .select({ threadId: threadLabel.threadId })
+    .from(threadLabel)
+    .where(and(eq(threadLabel.connectionId, connectionId), eq(threadLabel.labelId, labelId)));
+  return rows.map((r) => r.threadId);
+};
+
 export const getFolderSyncPageToken = async (
   connectionId: string,
   folder: string,

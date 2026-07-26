@@ -1,0 +1,1 @@
+ALTER TABLE "mail0_folder_sync_state" ADD COLUMN "resync_count" integer DEFAULT 0 NOT NULL;

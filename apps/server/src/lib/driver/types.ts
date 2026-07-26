@@ -86,8 +86,25 @@ export type ManagerConfig = {
   };
 };
 
+/**
+ * Per-folder IMAP mailbox state (Phase 6.1 UIDVALIDITY guard; Phase 6.2
+ * incremental-sync ladder). Optional on MailManager — IMAP-backed drivers
+ * report it; Gmail/Microsoft (their sync is cursor-based) leave it absent
+ * and the guard simply doesn't apply.
+ */
+export interface FolderState {
+  folder: string;
+  path: string;
+  uidValidity: number | null;
+  uidNext: number | null;
+  /** 63-bit; kept as string to avoid JS precision loss. */
+  highestModseq: string | null;
+  messages: number | null;
+}
+
 export interface MailManager {
   config: ManagerConfig;
+  getFolderState?(folder: string): Promise<FolderState | null>;
   getMessageAttachments(id: string): Promise<
     {
       filename: string;

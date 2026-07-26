@@ -1,4 +1,5 @@
 import type {
+  FolderState,
   IGetThreadResponse,
   MailManager,
   ManagerConfig,
@@ -107,6 +108,10 @@ export class ImapSmtpProxyMailManager implements MailManager {
 
   get(id: string): Promise<IGetThreadResponse> {
     return this.rpc('get', [id]);
+  }
+
+  getFolderState(folder: string): Promise<FolderState | null> {
+    return this.rpc('getFolderState', [folder]);
   }
 
   create(data: IOutgoingMessage): Promise<{ id?: string | null }> {

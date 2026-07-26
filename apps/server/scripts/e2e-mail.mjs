@@ -453,5 +453,145 @@ if (!REAL) {
   });
 }
 
+if (!REAL) {
+  await leg('uidvalidity-guard', async () => {
+    // Phase 6.1 (MIGRATION-PLAN §9.1): a UIDVALIDITY change means cached
+    // UIDs may point at DIFFERENT messages. GreenMail's validity is
+    // boot-derived and its store is in-memory, so docker restart IS a real
+    // validity change plus a full mailbox swap — exactly the corruption
+    // scenario the guard exists for.
+    const postgres = (await import('postgres')).default;
+    const { ImapFlow } = await import('imapflow');
+    const sql = postgres(devVars.DATABASE_URL, { max: 1 });
+    const pgRow = async (connectionId) =>
+      (
+        await sql`SELECT uid_validity, page_token, resync_count FROM mail0_folder_sync_state
+                  WHERE connection_id = ${connectionId} AND folder = 'inbox'`
+      )[0];
+    const rawInboxState = async () => {
+      const client = new ImapFlow({
+        host: '127.0.0.1',
+        port: 3143,
+        secure: false,
+        auth: { user: mode.email, pass: mode.password },
+        logger: false,
+      });
+      await client.connect();
+      const mailbox = await client.mailboxOpen('INBOX');
+      const subjects = [];
+      if (mailbox.exists > 0) {
+        for await (const msg of client.fetch('1:*', { envelope: true })) {
+          subjects.push(msg.envelope?.subject ?? '');
+        }
+      }
+      const state = { uidValidity: Number(mailbox.uidValidity), subjects };
+      await client.logout();
+      return state;
+    };
+
+    try {
+      const result = await trpc('connections.list', { query: null });
+      const all = result?.connections ?? [];
+      const connectionId = (all.find((c) => c.email === mode.email) ?? all[0])?.id;
+      if (!connectionId) throw new Error('no connection id');
+
+      // Phase A: seed, let the JOB sync record the current validity.
+      // drop-recover just restarted GreenMail; its SMTP side can lag the
+      // IMAP probe. Retry the seed send briefly instead of dying on a
+      // boot-window socket close.
+      const sendWithRetry = async (subject) => {
+        for (let attempt = 1; ; attempt++) {
+          try {
+            await sendRawSmtp(subject);
+            return;
+          } catch (error) {
+            if (attempt >= 5) throw error;
+            await new Promise((r) => setTimeout(r, 3000));
+          }
+        }
+      };
+
+      // Window covers the watcher reconnect (~60 s) still pending from the
+      // drop-recover leg's own GreenMail restart just above.
+      const subjectA = `uidv A ${runId}`;
+      await sendWithRetry(subjectA);
+      let deadline = Date.now() + 150_000;
+      while (!(await subjectInInbox(subjectA, 20))) {
+        if (Date.now() > deadline) throw new Error('phase-A message never synced');
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      const before = await pgRow(connectionId);
+      if (before?.uid_validity == null)
+        throw new Error('sync did not record uid_validity before the change');
+
+      // The change: restart (new validity, empty store) and reseed B.
+      const { execSync } = await import('node:child_process');
+      execSync('docker restart greenmail-test', { stdio: 'ignore' });
+      deadline = Date.now() + 30_000;
+      for (;;) {
+        try {
+          await tcpProbe('127.0.0.1', 3143);
+          break;
+        } catch {
+          if (Date.now() > deadline) throw new Error('greenmail did not come back');
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
+      const subjectB = `uidv B ${runId}`;
+      await sendWithRetry(subjectB);
+
+      // Watcher reconnects (~60 s), notify fires, the guard must trip.
+      deadline = Date.now() + 180_000;
+      while (!(await subjectInInbox(subjectB, 20))) {
+        if (Date.now() > deadline) throw new Error('phase-B message never synced after restart');
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+
+      const server = await rawInboxState();
+      const after = await pgRow(connectionId);
+      if (Number(after?.uid_validity) === Number(before.uid_validity))
+        throw new Error('stored uid_validity did not change');
+      if (Number(after?.uid_validity) !== server.uidValidity)
+        throw new Error(
+          `stored validity ${after?.uid_validity} != server ${server.uidValidity}`,
+        );
+      if (after?.page_token != null) throw new Error('stale pageToken checkpoint survived');
+      if ((after?.resync_count ?? 0) < 1)
+        throw new Error('resync_count did not record the guard trip');
+
+      // Purge assert: the pre-change thread must be GONE from the app.
+      if (await subjectInInbox(subjectA, 20))
+        throw new Error(`stale pre-change thread "${subjectA}" still served`);
+
+      // Corruption non-event: every served page-1 thread's subject must
+      // exist on the server — nothing is served from a stale cache.
+      const serverSubjects = new Set(server.subjects);
+      for (const t of (await listInbox()).threads.slice(0, 10)) {
+        const thread = await trpc('mail.get', { query: { id: t.id } });
+        const subject = thread?.latest?.subject;
+        if (subject && !serverSubjects.has(subject))
+          throw new Error(`served thread "${subject}" does not exist on the server`);
+      }
+
+      // Reset assert: one more clean sync under the NEW validity zeroes the
+      // flap counter.
+      const subjectC = `uidv C ${runId}`;
+      await sendWithRetry(subjectC);
+      deadline = Date.now() + 90_000;
+      while (!(await subjectInInbox(subjectC, 20))) {
+        if (Date.now() > deadline) throw new Error('phase-C message never synced');
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      const final = await pgRow(connectionId);
+      if ((final?.resync_count ?? -1) !== 0)
+        throw new Error(`resync_count not reset after stable sync (=${final?.resync_count})`);
+
+      return `validity ${before.uid_validity} -> ${server.uidValidity}: guard tripped, cache purged, no stale serving, counter reset`;
+    } finally {
+      await sql.end();
+    }
+  });
+}
+
 console.log(`\n[e2e] mode=${mode.name} — ${failed ? 'FAILED' : 'ALL LEGS GREEN'}`);
 process.exit(failed ? 1 : 0);

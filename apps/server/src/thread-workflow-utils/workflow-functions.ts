@@ -17,7 +17,7 @@ import {
   ReSummarizeThread,
   SummarizeThread,
 } from '../lib/brain.fallback.prompts';
-import { getZeroAgent, getZeroSocketAgent, modifyThreadLabelsInDB } from '../lib/server-utils';
+import { getZeroAgent, reSyncThread, modifyThreadLabelsInDB } from '../lib/server-utils';
 import { EPrompts, defaultLabels, type ParsedMessage } from '../types';
 import { analyzeEmailIntent, generateAutomaticDraft } from './index';
 import { getPrompt } from '../pipelines.effect';
@@ -145,8 +145,9 @@ export const workflowFunctions: Record<string, WorkflowFunction> = {
       draftId: createdDraft?.id,
     });
 
-    const socketAgent = await getZeroSocketAgent(context.connectionId);
-    await socketAgent.queue('_reSyncThread', { threadId: context.threadId });
+    // Phase 5.4: the ZeroAgent socket queue is gone; re-sync directly (this
+    // whole module is the dormant Gmail enrichment path anyway).
+    await reSyncThread(context.connectionId, context.threadId);
 
     const result = await agent.syncThread({ threadId: context.threadId });
     console.log('[WORKFLOW_FUNCTIONS] Synced thread:', result);

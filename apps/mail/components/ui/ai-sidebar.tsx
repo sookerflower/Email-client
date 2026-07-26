@@ -13,10 +13,9 @@ import { PromptsDialog } from './prompts-dialog';
 import { Button } from '@/components/ui/button';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { useLabels } from '@/hooks/use-labels';
-import { useAgentChat } from 'agents/ai-react';
 import { X, Expand, Plus } from 'lucide-react';
 import { useParams } from 'react-router';
-import { useAgent } from 'agents/react';
+import { useChat } from '@ai-sdk/react';
 import { useQueryState } from 'nuqs';
 import { cn } from '@/lib/utils';
 import posthog from 'posthog-js';
@@ -306,20 +305,16 @@ function AISidebar({ className }: AISidebarProps) {
   // onMessage body lives on unchanged in this hook + lib/realtime-beacons).
   useRealtimeBeacons(activeConnection?.id ? String(activeConnection.id) : undefined);
 
-  // Dead on Node (no ZeroAgent DO) — kept solely because useAgentChat needs
-  // an agent handle until the 5.4 useChat swap removes both together.
-  const agent = useAgent({
-    agent: 'ZeroAgent',
-    name: activeConnection?.id ? String(activeConnection.id) : 'general',
-    host: `${import.meta.env.VITE_PUBLIC_BACKEND_URL}`,
-    onError: (e) => console.log(e),
-  });
+  const connectionId = activeConnection?.id ? String(activeConnection.id) : undefined;
+  const chatApi = `${import.meta.env.VITE_PUBLIC_BACKEND_URL}/api/chat/${connectionId ?? 'none'}`;
 
-  const chatState = useAgentChat({
-    getInitialMessages: async () => {
-      return [];
-    },
-    agent,
+  // Phase 5.4 (§8a): plain HTTP-streaming chat. useAgentChat was a wrapper
+  // around useChat speaking the WS protocol — same returned surface, so the
+  // AIChat render contract is unchanged. History intentionally starts []
+  // (parity: the WS version never loaded persisted history either).
+  const chatState = useChat({
+    api: chatApi,
+    credentials: 'include',
     maxSteps: 10,
     body: {
       threadId: threadId ?? undefined,
@@ -392,7 +387,13 @@ function AISidebar({ className }: AISidebarProps) {
 
   const handleNewChat = useCallback(() => {
     chatState.setMessages([]);
-  }, [chatState]);
+    // Server-side clear replaces the WS cf_agent_chat_clear frame.
+    if (connectionId) {
+      void fetch(chatApi, { method: 'DELETE', credentials: 'include' }).catch((error) =>
+        console.warn('chat history clear failed:', error),
+      );
+    }
+  }, [chatState, chatApi, connectionId]);
 
   return (
     <>

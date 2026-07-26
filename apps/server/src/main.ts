@@ -9,21 +9,17 @@ import { WorkerEntrypoint, DurableObject } from 'cloudflare:workers';
 import { outboxStore, snoozeStore, subscriptionStore } from './lib/stores';
 import { getZeroAgent, getZeroDB, verifyToken } from './lib/server-utils';
 import { SyncThreadsWorkflow } from './workflows/sync-threads-workflow';
-import { ShardRegistry, ZeroAgent, ZeroDriver } from './routes/agent';
+import { ShardRegistry, ZeroDriver } from './routes/agent';
 import { ThreadSyncWorker } from './routes/agent/sync-worker';
 import { oAuthDiscoveryMetadata } from 'better-auth/plugins';
 import { EProviders, type IEmailSendBatch } from './types';
-import { ThinkingMCP } from './lib/sequential-thinking';
 
 import { contextStorage } from 'hono/context-storage';
 import { createLocalJWKSet, jwtVerify } from 'jose';
 import { enableBrainFunction } from './lib/brain';
 import { trpcServer } from '@hono/trpc-server';
-import { agentsMiddleware } from 'hono-agents';
-import { ZeroMCP } from './routes/agent/mcp';
 import { publicRouter } from './routes/auth';
 import { chatRouter } from './routes/chat';
-import { isNodeRuntime } from './lib/runtime';
 import { WorkflowRunner } from './pipelines';
 import { initTracing } from './lib/tracing';
 import { env, type ZeroEnv } from './env';
@@ -247,78 +243,12 @@ const app = new Hono<HonoContext>()
     const auth = createAuth();
     return oAuthDiscoveryMetadata(auth)(c.req.raw);
   })
-  .mount(
-    '/sse',
-    async (request, env, ctx) => {
-      const authBearer = request.headers.get('Authorization');
-      if (!authBearer) {
-        console.log('No auth provided');
-        return new Response('Unauthorized', { status: 401 });
-      }
-      const auth = createAuth();
-      const session = await auth.api.getMcpSession({ headers: request.headers });
-      if (!session) {
-        console.log('Invalid auth provided', Array.from(request.headers.entries()));
-        return new Response('Unauthorized', { status: 401 });
-      }
-      ctx.props = {
-        userId: session?.userId,
-      };
-      return ZeroMCP.serveSSE('/sse', { binding: 'ZERO_MCP' }).fetch(request, env, ctx);
-    },
-    { replaceRequest: false },
-  )
-  .mount(
-    '/mcp/thinking/sse',
-    async (request, env, ctx) => {
-      return ThinkingMCP.serveSSE('/mcp/thinking/sse', { binding: 'THINKING_MCP' }).fetch(
-        request,
-        env,
-        ctx,
-      );
-    },
-    { replaceRequest: false },
-  )
-  .mount(
-    '/mcp',
-    async (request, env, ctx) => {
-      const authBearer = request.headers.get('Authorization');
-      if (!authBearer) {
-        return new Response('Unauthorized', { status: 401 });
-      }
-      const auth = createAuth();
-      const session = await auth.api.getMcpSession({ headers: request.headers });
-      if (!session) {
-        console.log('Invalid auth provided', Array.from(request.headers.entries()));
-        return new Response('Unauthorized', { status: 401 });
-      }
-      ctx.props = {
-        userId: session?.userId,
-      };
-      return ZeroMCP.serve('/mcp', { binding: 'ZERO_MCP' }).fetch(request, env, ctx);
-    },
-    { replaceRequest: false },
-  )
+  // Phase 5.4: the agents-SDK WS layer (agentsMiddleware) and the ZeroMCP /
+  // ThinkingMCP mounts are gone — realtime is SSE (/realtime, Node layer),
+  // chat is HTTP (/api/chat), and the thinking tool runs in-process. An
+  // external MCP surface, if ever wanted, is a plain @modelcontextprotocol
+  // Streamable-HTTP server reusing tools.ts (deliberately deferred).
   .route('/api', api)
-  .use(
-    '*',
-    // On Node the agents-SDK WebSocket layer is replaced in Phase 5 of the
-    // migration (SSE + HTTP chat); until then requests fall through so
-    // /health and friends keep working.
-    isNodeRuntime
-      ? async (_c, next) => {
-          await next();
-        }
-      : agentsMiddleware({
-          options: {
-            onBeforeConnect: (c) => {
-              if (!c.headers.get('Cookie')) {
-                return new Response('Unauthorized', { status: 401 });
-              }
-            },
-          },
-        }),
-  )
   .get('/health', (c) => c.json({ message: 'Zero Server is Up!' }))
   .get('/', (c) => c.redirect(`${env.VITE_PUBLIC_APP_URL}`))
   .post('/a8n/notify/:providerId', async (c) => {
@@ -676,11 +606,8 @@ export default class Entry extends WorkerEntrypoint<ZeroEnv> {
 }
 
 export {
-  ZeroAgent,
-  ZeroMCP,
   ZeroDB,
   ZeroDriver,
-  ThinkingMCP,
   WorkflowRunner,
   ThreadSyncWorker,
   SyncThreadsWorkflow,

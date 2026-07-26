@@ -1,5 +1,5 @@
-import type { ThinkingMCP, ThreadSyncWorker, WorkflowRunner, ZeroDB, ZeroMCP } from './main';
-import type { ShardRegistry, ZeroAgent, ZeroDriver } from './routes/agent';
+import type { ThreadSyncWorker, WorkflowRunner, ZeroDB } from './main';
+import type { ShardRegistry, ZeroDriver } from './routes/agent';
 
 import { env as _env } from 'cloudflare:workers';
 
@@ -7,9 +7,6 @@ export type ZeroEnv = {
   ZERO_DRIVER: DurableObjectNamespace<ZeroDriver>;
   SHARD_REGISTRY: DurableObjectNamespace<ShardRegistry>;
   ZERO_DB: DurableObjectNamespace<ZeroDB>;
-  ZERO_AGENT: DurableObjectNamespace<ZeroAgent>;
-  ZERO_MCP: DurableObjectNamespace<ZeroMCP>;
-  THINKING_MCP: DurableObjectNamespace<ThinkingMCP>;
   WORKFLOW_RUNNER: DurableObjectNamespace<WorkflowRunner>;
 
   THREAD_SYNC_WORKER: DurableObjectNamespace<ThreadSyncWorker>;

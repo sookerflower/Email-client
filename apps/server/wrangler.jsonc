@@ -28,14 +28,7 @@
       ],
       "durable_objects": {
         "bindings": [
-          {
-            "name": "ZERO_AGENT",
-            "class_name": "ZeroAgent",
-          },
-          {
-            "name": "ZERO_MCP",
-            "class_name": "ZeroMCP",
-          },
+
           {
             "name": "ZERO_DB",
             "class_name": "ZeroDB",
@@ -44,10 +37,7 @@
             "name": "ZERO_DRIVER",
             "class_name": "ZeroDriver",
           },
-          {
-            "name": "THINKING_MCP",
-            "class_name": "ThinkingMCP",
-          },
+
           {
             "name": "WORKFLOW_RUNNER",
             "class_name": "WorkflowRunner",
@@ -139,6 +129,10 @@
           "tag": "v9",
           "new_sqlite_classes": ["ShardRegistry"],
         },
+        {
+          "tag": "v10",
+          "deleted_classes": ["ZeroAgent", "ZeroMCP", "ThinkingMCP"],
+        },
 
       ],
 
@@ -194,14 +188,7 @@
       },
       "durable_objects": {
         "bindings": [
-          {
-            "name": "ZERO_AGENT",
-            "class_name": "ZeroAgent",
-          },
-          {
-            "name": "ZERO_MCP",
-            "class_name": "ZeroMCP",
-          },
+
           {
             "name": "ZERO_DB",
             "class_name": "ZeroDB",
@@ -210,10 +197,7 @@
             "name": "ZERO_DRIVER",
             "class_name": "ZeroDriver",
           },
-          {
-            "name": "THINKING_MCP",
-            "class_name": "ThinkingMCP",
-          },
+
           {
             "name": "WORKFLOW_RUNNER",
             "class_name": "WorkflowRunner",
@@ -315,6 +299,10 @@
           "tag": "v10",
           "new_sqlite_classes": ["ShardRegistry"],
         },
+        {
+          "tag": "v11",
+          "deleted_classes": ["ZeroAgent", "ZeroMCP", "ThinkingMCP"],
+        },
 
       ],
       "observability": {
@@ -373,14 +361,7 @@
       ],
       "durable_objects": {
         "bindings": [
-          {
-            "name": "ZERO_AGENT",
-            "class_name": "ZeroAgent",
-          },
-          {
-            "name": "ZERO_MCP",
-            "class_name": "ZeroMCP",
-          },
+
           {
             "name": "ZERO_DB",
             "class_name": "ZeroDB",
@@ -389,10 +370,7 @@
             "name": "ZERO_DRIVER",
             "class_name": "ZeroDriver",
           },
-          {
-            "name": "THINKING_MCP",
-            "class_name": "ThinkingMCP",
-          },
+
           {
             "name": "WORKFLOW_RUNNER",
             "class_name": "WorkflowRunner",
@@ -487,6 +465,10 @@
         {
           "tag": "v10",
           "new_sqlite_classes": ["ShardRegistry"],
+        },
+        {
+          "tag": "v11",
+          "deleted_classes": ["ZeroAgent", "ZeroMCP", "ThinkingMCP"],
         },
 
       ],

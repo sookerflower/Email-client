@@ -3,7 +3,7 @@ import { useAIFullScreen, useAISidebar } from '../ui/ai-sidebar';
 import { VoiceProvider } from '@/providers/voice-provider';
 import useComposeEditor from '@/hooks/use-compose-editor';
 import { useRef, useCallback, useEffect } from 'react';
-import type { useAgentChat } from 'agents/ai-react';
+import type { useChat } from '@ai-sdk/react';
 import { Markdown } from '@react-email/components';
 import { TextShimmer } from '../ui/text-shimmer';
 import { useThread } from '@/hooks/use-threads';
@@ -161,10 +161,14 @@ const GetThreadToolResponse = ({ result, args }: { result: any; args: any }) => 
 };
 
 const GetUserLabelsToolResponse = ({ result }: { result: any }) => {
-  if (!result?.labels) return null;
+  // The IMAP driver returns a bare array; the old code only handled a
+  // {labels: [...]} wrapper, so this card never rendered (pre-existing —
+  // found during the 5.4 tool-render pass). Accept both.
+  const labels = Array.isArray(result) ? result : result?.labels;
+  if (!labels?.length) return null;
   return (
-    <div className="flex flex-wrap gap-2">
-      {result.labels.map((label: any) => (
+    <div className="flex flex-wrap gap-2" data-testid="tool-card-labels">
+      {labels.map((label: any) => (
         <MailLabels key={label.id} labels={[label]} />
       ))}
     </div>
@@ -196,13 +200,71 @@ const ToolResponse = ({ toolName, result, args }: { toolName: string; result: an
   }
 };
 
+// Mirrors the server's routes/agent/utils.ts APPROVAL constants — the exact
+// strings processToolCalls matches on.
+const APPROVAL = {
+  YES: 'Yes, confirmed.',
+  NO: 'No, denied.',
+} as const;
+
+/** Tools defined WITHOUT execute server-side; the human decides. */
+const TOOLS_REQUIRING_APPROVAL: ReadonlySet<string> = new Set([Tools.BulkDelete]);
+
+/**
+ * Approval card for a pending gated tool call (Phase 5.4 HITL). Approve /
+ * reject feed addToolResult, and useChat automatically continues the
+ * conversation; the server executes only on APPROVAL.YES.
+ */
+const ToolApprovalCard = ({
+  toolName,
+  args,
+  toolCallId,
+  addToolResult,
+}: {
+  toolName: string;
+  args: any;
+  toolCallId: string;
+  addToolResult: (result: { toolCallId: string; result: string }) => void;
+}) => {
+  const summary =
+    toolName === Tools.BulkDelete
+      ? `Move ${args?.threadIds?.length ?? 0} email(s) to trash?`
+      : `Run ${toolName}?`;
+  return (
+    <div
+      className="my-2 rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-950"
+      data-testid={`tool-approval-${toolName}`}
+    >
+      <p className="mb-2 text-sm font-medium">{summary}</p>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          className="rounded-md bg-red-600 px-3 py-1 text-sm text-white hover:bg-red-700"
+          onClick={() => addToolResult({ toolCallId, result: APPROVAL.YES })}
+        >
+          Approve
+        </button>
+        <button
+          type="button"
+          className="rounded-md border border-gray-300 px-3 py-1 text-sm hover:bg-gray-100 dark:border-gray-700 dark:hover:bg-gray-800"
+          onClick={() => addToolResult({ toolCallId, result: APPROVAL.NO })}
+        >
+          Reject
+        </button>
+      </div>
+    </div>
+  );
+};
+
 export function AIChat({
   messages,
   setInput,
   error,
   handleSubmit,
   status,
-}: ReturnType<typeof useAgentChat>): React.ReactElement {
+  stop,
+  addToolResult,
+}: ReturnType<typeof useChat>): React.ReactElement {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const { isFullScreen } = useAIFullScreen();
@@ -298,17 +360,34 @@ export function AIChat({
 
               return (
                 <div key={`${message.id}-${index}`} className="mb-2 flex flex-col" data-message-role={message.role}>
-                  {toolParts.map(
-                    (part, index) =>
-                      part.toolInvocation?.result && (
-                        <ToolResponse
-                          key={`${part.toolInvocation.toolName}-${index}`}
-                          toolName={part.toolInvocation.toolName}
-                          result={part.toolInvocation.result}
-                          args={part.toolInvocation.args}
+                  {toolParts.map((part, index) => {
+                    if (part.type !== 'tool-invocation' || !part.toolInvocation) return null;
+                    const invocation = part.toolInvocation;
+                    // Pending gated call: the human decides before anything runs.
+                    if (
+                      invocation.state !== 'result' &&
+                      TOOLS_REQUIRING_APPROVAL.has(invocation.toolName)
+                    ) {
+                      return (
+                        <ToolApprovalCard
+                          key={`${invocation.toolCallId}-approval`}
+                          toolName={invocation.toolName}
+                          args={invocation.args}
+                          toolCallId={invocation.toolCallId}
+                          addToolResult={addToolResult}
                         />
-                      ),
-                  )}
+                      );
+                    }
+                    if (invocation.state !== 'result' || !invocation.result) return null;
+                    return (
+                      <ToolResponse
+                        key={`${invocation.toolName}-${index}`}
+                        toolName={invocation.toolName}
+                        result={invocation.result}
+                        args={invocation.args}
+                      />
+                    );
+                  })}
                   {textParts.length > 0 && (
                     <div
                       className={cn(
@@ -362,6 +441,14 @@ export function AIChat({
               <TextShimmer className="text-muted-foreground text-xs">
                 zero is thinking...
               </TextShimmer>
+              <button
+                type="button"
+                data-testid="chat-stop"
+                className="text-muted-foreground rounded border border-gray-300 px-2 py-0.5 text-xs hover:bg-gray-100 dark:border-gray-700 dark:hover:bg-gray-800"
+                onClick={() => stop()}
+              >
+                Stop
+              </button>
             </div>
           )}
           {(status === 'error' || !!error) && (

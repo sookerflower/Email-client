@@ -47,12 +47,32 @@ with the incidents and verification numbers. Read it before doing anything.
   outbox-reconcile + unsnooze (snooze actually works now). Bull Board:
   `node scripts/bull-board.mjs` (:8793, unbundled on purpose).
 
-### Next: Phase 5 (needs user go before starting) — flagged HIGH RISK
-SSE + HTTP chat replacing the agents-SDK WS; broadcasts are currently a
-logged no-op hook in MailEngine/jobs. Then Phase 6 (hardening/cutover).
-E2E `--real` note: sent-sync/idle-push windows are 240 s because full-
-refetch syncs run 2–4 min on m.re.cx; incremental sync (post-Phase-4 gap
-list) is what shrinks them.
+- **Phase 5 (closed 2026-07-26)**: realtime + chat, agents SDK fully gone.
+  Beacons: `publishBeacon` (Upstash REST, workerd-safe) → Redis pub/sub →
+  Node-only SSE relay at **GET /realtime/:connectionId** (`src/node/
+  realtime.ts`, registered from entry.ts — NOT /api, the tRPC catch-all
+  would eat late-registered /api paths). Chat: **POST /api/chat/
+  :connectionId** (`routes/chat.ts`, registered inside the /api chain
+  before the catch-all). Both routes enforce real ownership auth (401/403,
+  missing≡not-owned). Client: `useRealtimeBeacons` (EventSource,
+  predicate-based invalidations, blanket invalidation on reconnect) +
+  `useChat`; BulkDelete is HITL approval-gated end to end. Publish only
+  AFTER the awaited write (audit list in MIGRATION-PLAN 5.1 entry).
+  `createDb` no-ops `end()` on the shared pg pool — never "fix" callers
+  to close it. E2E: `scripts/e2e-realtime.mjs` (15 legs + cleanup) joins
+  e2e-mail.mjs as the verification standard; `--real` runs self-clean
+  their messages (mailbox bloat slows syncs and flakes windows).
+  Accepted regression (user-approved): no cross-tab live chat mid-stream.
+  Known env constraint: the ws.re.cx LLM proxy BUFFERS SSE — chat arrives
+  as one burst; fixing that proxy is outside this repo.
+
+### Next: Phase 6 — hardening/cutover (needs user go before starting)
+UIDVALIDITY guard + CONDSTORE/QRESYNC incremental-sync ladder (the 2–4 min
+full-refetch syncs are the one big UX cost left; E2E `--real` windows are
+240 s because of them), connection-discipline audit against the real
+server, dead-code sweep (remaining empty DO shells ZeroDB/ZeroDriver/
+ShardRegistry + WorkflowRunner/ThreadSyncWorker/workflows and the workerd
+path at cutover), repo hygiene, fresh-mailbox resync drill.
 
 ## How to run / verify (Windows, Node 22)
 - Build both bundles: `node src/node/build.mjs` (from `apps/server`).
@@ -64,9 +84,11 @@ list) is what shrinks them.
   (GreenMail) and `--real` (m.re.cx; it ban-probes first). All legs must be
   green after every change. Regression test:
   `npx vitest run --config vitest.integration.config.ts`.
-- tsc baselines (must not increase): **server 28, mail 257**
-  (`npx tsc --noEmit`, count `error TS` lines; both apps have pre-existing
-  errors — judge by delta).
+- tsc baselines (must not increase): **server 27, mail 251** (as of Phase
+  5 close; `npx tsc --noEmit`, count `error TS` lines; both apps have
+  pre-existing errors — judge by delta).
+- E2E realtime/chat: `node scripts/e2e-realtime.mjs` (and `--real`) —
+  same green/red standard as e2e-mail.mjs.
 - `npx wrangler deploy --dry-run --outdir /tmp/wc --env local` must build.
 - Both login paths must keep working: Google OAuth (URL generation; full
   flow blocked on a Google-console redirect_uri fix) AND Custom IMAP/SMTP.

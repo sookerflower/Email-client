@@ -3,7 +3,6 @@ import { OutgoingMessageType } from '../routes/agent/types';
 import { getContext } from 'hono/context-storage';
 import { connection } from '../db/schema';
 import { defaultPageSize } from './utils';
-import { isNodeRuntime } from './runtime';
 import type { HonoContext } from '../ctx';
 import { createDriver } from './driver';
 import { eq } from 'drizzle-orm';
@@ -109,9 +108,9 @@ const getCounts = async (connectionId: string): Promise<CountResult[]> => {
 };
 
 /**
- * Push storage/count state to connected clients. On Node this is a
- * MailEngine beacon no-op until Phase 5 (SSE); on workerd it still rides the
- * ZeroAgent WebSocket.
+ * Push storage/count state to connected clients via the Phase 5 beacon
+ * layer (Redis pub/sub -> SSE). Payload-carrying: the data rides in the
+ * message itself, so there is no publish-after-commit concern here.
  */
 export const sendDoState = async (connectionId: string) => {
   try {
@@ -122,35 +121,19 @@ export const sendDoState = async (connectionId: string) => {
     // Wire shape unchanged from the DO era — the client destructures
     // { isSyncing, syncingFolders, storageSize, counts, shards }. Only the
     // numbers' provenance changed (Postgres); shards is 0 forever.
-    const message = {
+    const { getMailEngine } = await import('./mail-engine');
+    const engine = await getMailEngine(connectionId);
+    engine.broadcast({
       type: OutgoingMessageType.Do_State,
       isSyncing: false,
       syncingFolders: ['inbox'],
       storageSize,
       counts,
       shards: 0,
-    };
-
-    if (isNodeRuntime) {
-      const { getMailEngine } = await import('./mail-engine');
-      const engine = await getMailEngine(connectionId);
-      engine.broadcast(message);
-      return;
-    }
-
-    const agent = await getZeroSocketAgent(connectionId);
-    return agent.broadcastChatMessage(
-      message as Parameters<Awaited<ReturnType<typeof getZeroSocketAgent>>['broadcastChatMessage']>[0],
-    );
+    });
   } catch (error) {
     console.error(`[sendDoState] Failed to send do state for connection ${connectionId}:`, error);
   }
-};
-
-/** workerd-only: the ZeroAgent chat/WS Durable Object (removed in Phase 5). */
-export const getZeroSocketAgent = async (connectionId: string) => {
-  const stub = env.ZERO_AGENT.get(env.ZERO_AGENT.idFromName(connectionId));
-  return stub;
 };
 
 export const getActiveConnection = async () => {

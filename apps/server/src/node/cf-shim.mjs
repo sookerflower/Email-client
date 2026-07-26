@@ -188,9 +188,6 @@ export const env = {
   ZERO_DRIVER: doNamespaceStub('ZERO_DRIVER'),
   SHARD_REGISTRY: doNamespaceStub('SHARD_REGISTRY'),
   ZERO_DB: doNamespaceStub('ZERO_DB'),
-  ZERO_AGENT: doNamespaceStub('ZERO_AGENT'),
-  ZERO_MCP: doNamespaceStub('ZERO_MCP'),
-  THINKING_MCP: doNamespaceStub('THINKING_MCP'),
   WORKFLOW_RUNNER: doNamespaceStub('WORKFLOW_RUNNER'),
   THREAD_SYNC_WORKER: doNamespaceStub('THREAD_SYNC_WORKER'),
 

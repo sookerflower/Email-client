@@ -1,7 +1,7 @@
 import { getActiveConnection, getZeroDB } from '../lib/server-utils';
 import { Ratelimit, type RatelimitConfig } from '@upstash/ratelimit';
 import type { HonoContext, HonoVariables } from '../ctx';
-import { getConnInfo } from 'hono/cloudflare-workers';
+import { getConnInfo } from '@hono/node-server/conninfo';
 import { initTRPC, TRPCError } from '@trpc/server';
 
 import { redis } from '../lib/services';

@@ -1,5 +1,5 @@
 import { privateProcedure, router } from '../trpc';
-import jwt from '@tsndr/cloudflare-worker-jwt';
+import { SignJWT } from 'jose';
 
 export const userRouter = router({
   delete: privateProcedure.mutation(async ({ ctx }) => {
@@ -13,13 +13,13 @@ export const userRouter = router({
     return { success, message };
   }),
   getIntercomToken: privateProcedure.query(async ({ ctx }) => {
-    const token = await jwt.sign(
-      {
-        user_id: ctx.sessionUser.id,
-        email: ctx.sessionUser.email,
-      },
-      ctx.c.env.JWT_SECRET,
-    );
+    // HS256, no expiry — same shape the previous jwt library produced.
+    const token = await new SignJWT({
+      user_id: ctx.sessionUser.id,
+      email: ctx.sessionUser.email,
+    })
+      .setProtectedHeader({ alg: 'HS256' })
+      .sign(new TextEncoder().encode(ctx.c.env.JWT_SECRET));
     return token;
   }),
 });

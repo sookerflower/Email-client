@@ -3,7 +3,6 @@
   "include": [
     "src/**/*.ts",
     "src/overrides.d.ts",
-    "worker-configuration.d.ts",
     "drizzle.config.ts",
     "tests/**/*.ts",
     "evals/**/*.ts"

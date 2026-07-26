@@ -68,10 +68,10 @@ with the incidents and verification numbers. Read it before doing anything.
 
 - **Phase 6 — hardening/cutover, IN PROGRESS.** Order (confirmed with user,
   correctness before speed): 6.1 UIDVALIDITY guard (done) → 6.2 incremental
-  ladder (done) → 6.3 connection-discipline audit (done) → **6.4 dead-code
-  sweep + workerd deletion (NEXT)** (user-approved: delete it entirely, do not
-  keep a dual-target story) → 6.5 fresh-mailbox resync drill. Each step:
-  report, hold for user go, commit+push on close.
+  ladder (done) → 6.3 connection-discipline audit (done) → 6.4 workerd
+  deletion + repo hygiene (done) → **6.5 fresh-mailbox resync drill (NEXT —
+  closes Phase 6)**. Each step: report, hold for user go, commit+push on
+  close.
   - **6.1 (closed)**: `MailManager.getFolderState` (optional; IMAP driver +
     proxy implement it) + `syncFolderJob` compares server `uidValidity` to
     `folder_sync_state` before every sync. On change: purge folder-labeled
@@ -127,17 +127,27 @@ with the incidents and verification numbers. Read it before doing anything.
     out-of-band cleanup deletions left ghost threads a leg then mutated.
     Real-run census: driver opens=1, watcher opens=1 over a full --real
     e2e-mail run.
-  - **6.4 (planned)**: delete the workerd/Cloudflare path entirely —
-    wrangler.jsonc + wrangler dep + worker-configuration.d.ts, remaining DO
-    shells (ZeroDB/ZeroDriver/ShardRegistry/WorkflowRunner/ThreadSyncWorker),
-    dead CF workflow classes, the workerd `Entry` class, the cf-shim
-    indirection; retire `wrangler --dry-run` from the verification standard
-    (replaced by Node build+boot+both suites, which has been the real
-    standard since Phase 0). **Hard constraint, verify immediately after
-    deletion, not just at phase end: both logins (Google OAuth + Custom
-    IMAP/SMTP) must survive intact** — Google OAuth is runtime-agnostic and
-    was never meant to go; a workerd sweep is exactly where it could get
-    caught by accident. Expect tsc floor to drop; re-baseline when it lands.
+  - **6.4 (closed)**: the workerd/Cloudflare path is GONE. Deleted:
+    wrangler.jsonc (both apps) + wrangler deps + worker-configuration.d.ts,
+    DO shells (ZeroDB/ZeroDriver/ShardRegistry/WorkflowRunner/
+    ThreadSyncWorker), the SyncThreads* CF workflow classes + the CF
+    workflow engine (thread-workflow-utils, except live workflow-utils.ts),
+    the workerd `Entry` class, pipelines.ts (getPromptName moved to
+    lib/prompts.ts), routes/agent/db (durable-sqlite leftovers), the legacy
+    imap-sidecar/ wrapper, cf-shim + build-time cloudflare:* aliasing (src/
+    env.ts now loads defaults + .dev.vars into process.env itself), the
+    mail app's @cloudflare/vite-plugin (SPA mode — plain vite). Live-site
+    conversions: env.HYPERDRIVE.connectionString → env.DATABASE_URL (15
+    sites); send_email_queue binding → lib/send-queue.ts (worker
+    /enqueue-send); subscribe_queue/thread_queue → documented dormant-Gmail
+    no-op logs (mapping comments at the sites, plan in MIGRATION-PLAN §3);
+    blob-store fs-only; getConnInfo from @hono/node-server (rate-limit IPs
+    are real now, were 'no-ip' under the CF import); Intercom token signed
+    with jose. KEPT on purpose: Gmail driver + /a8n/notify webhook
+    (documented future-Gmail-push mapping), @tsndr/cloudflare-worker-jwt
+    inside google-subscription.factory.ts only (runtime-agnostic lib, part
+    of the dormant Gmail path). Both logins verified immediately after the
+    deletion compiled, before anything else.
   - **6.5 (planned)**: fresh-mailbox resync drill — wipe Postgres index/blobs,
     boot worker+api from nothing, full resync from m.re.cx, both suites
     green, timings recorded. Live proof of "no data migration needed."
@@ -159,12 +169,14 @@ with the incidents and verification numbers. Read it before doing anything.
   (GreenMail) and `--real` (m.re.cx; it ban-probes first). All legs must be
   green after every change. Regression test:
   `npx vitest run --config vitest.integration.config.ts`.
-- tsc baselines (must not increase): **server 27, mail 251** (as of Phase
-  5 close; `npx tsc --noEmit`, count `error TS` lines; both apps have
-  pre-existing errors — judge by delta).
+- tsc baselines (must not increase): **server 7, mail 230** (re-baselined at
+  6.4 close after the CF types left the tree; `npx tsc --noEmit`, count
+  `error TS` lines; both apps have pre-existing upstream errors — judge by
+  delta).
 - E2E realtime/chat: `node scripts/e2e-realtime.mjs` (and `--real`) —
   same green/red standard as e2e-mail.mjs.
-- `npx wrangler deploy --dry-run --outdir /tmp/wc --env local` must build.
+- The standard is Node build + boot + both suites green (wrangler dry-run
+  retired at 6.4 — there is no workerd path anymore).
 - Both login paths must keep working: Google OAuth (URL generation; full
   flow blocked on a Google-console redirect_uri fix) AND Custom IMAP/SMTP.
   Gmail *sync* pipeline is dormant — never delete Google login code.
@@ -176,8 +188,9 @@ with the incidents and verification numbers. Read it before doing anything.
   pre-damage esbuild bundle).
 - GreenMail fixture: docker `greenmail-test` (IMAP 3143 / SMTP 3025, accepts
   any credentials). Compose: Postgres 5432, Valkey 6379, Upstash proxy 8079.
-- Local infra creds/env: `apps/server/.dev.vars` (gitignored; cf-shim merges
-  it + wrangler local vars + process.env, and mirrors into process.env).
+- Local infra creds/env: `apps/server/.dev.vars` (gitignored; src/env.ts
+  merges local defaults + .dev.vars + process.env and mirrors the result
+  into process.env at module load).
 
 ## Working agreements (user-set, standing)
 - Work sub-step by sub-step; **report after each sub-step and hold** for go.

@@ -3,11 +3,9 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "wrangler dev --show-interactive-dev-session=false --env local",
     "build:node": "node src/node/build.mjs",
+    "dev": "node src/node/build.mjs && node dist-node/server.mjs",
     "dev:node": "node src/node/build.mjs && node dist-node/server.mjs",
-    "deploy": "wrangler deploy",
-    "types": "wrangler types --env local",
     "lint": "eslint .",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
@@ -15,8 +13,6 @@
     "db:studio": "drizzle-kit studio",
     "eval": "evalite",
     "eval:dev": "evalite watch",
-    "imap:sidecar": "tsx imap-sidecar/server.ts",
-    "test:cron": "curl 'http://localhost:8787/cdn-cgi/handler/scheduled'",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "worker": "node dist-node/worker.mjs"
   },
@@ -91,7 +87,6 @@
     "twilio": "5.7.0",
     "ulid": "3.0.1",
     "uuid": "11.1.0",
-    "wrangler": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

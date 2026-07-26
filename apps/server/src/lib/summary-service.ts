@@ -17,7 +17,7 @@ import { env } from '../env';
  * pgvector/semantic search is ever wanted (explicitly deferred).
  */
 
-const db = () => createDb(env.HYPERDRIVE.connectionString).db;
+const db = () => createDb(env.DATABASE_URL).db;
 
 const MAX_INPUT_CHARS = 6000;
 

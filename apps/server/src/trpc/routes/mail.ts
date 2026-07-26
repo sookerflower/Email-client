@@ -15,12 +15,13 @@ import {
 } from '../../lib/driver/types';
 import { updateWritingStyleMatrix } from '../../services/writing-style-service';
 import { snoozeStore, outboxStore, checkAndSetCooldown } from '../../lib/stores';
-import type { DeleteAllSpamResponse, IEmailSendBatch } from '../../types';
+import type { DeleteAllSpamResponse } from '../../types';
 import { activeDriverProcedure, router, privateProcedure } from '../trpc';
 import { processEmailHtml } from '../../lib/email-processor';
 import { defaultPageSize, FOLDERS } from '../../lib/utils';
 import { toAttachmentFiles } from '../../lib/attachments';
 import { serializedFileSchema } from '../../lib/schemas';
+import { enqueueScheduledSend } from '../../lib/send-queue';
 import { getContext } from 'hono/context-storage';
 import { type HonoContext } from '../../ctx';
 import { TRPCError } from '@trpc/server';
@@ -510,8 +511,6 @@ export const mailRouter = router({
           targetTime = Date.now() + 15_000;
         }
 
-        const rawDelaySeconds = Math.floor((targetTime - Date.now()) / 1000);
-
         const mailPayload = {
           ...mail,
           draftId,
@@ -539,13 +538,8 @@ export const mailRouter = router({
         // (queue for short delays, hourly cron promotion for long ones) is
         // gone. If the enqueue fails, the row stays 'pending' and the
         // reconciliation sweep recovers it at send_at.
-        const queueBody: IEmailSendBatch = {
-          messageId,
-          connectionId: activeConnection.id,
-          sendAt: targetTime,
-        };
         try {
-          await env.send_email_queue.send(queueBody, { delaySeconds: rawDelaySeconds });
+          await enqueueScheduledSend(messageId, activeConnection.id, targetTime);
           await outboxStore.markQueued(messageId);
         } catch (error) {
           console.error(

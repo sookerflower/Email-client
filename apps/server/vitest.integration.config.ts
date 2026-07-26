@@ -1,19 +1,11 @@
 import { defineConfig } from 'vitest/config';
-import { fileURLToPath } from 'node:url';
 
 /**
  * Integration tests run under plain Node against live local services
- * (Postgres, Redis proxy, GreenMail). `cloudflare:workers` resolves to the
- * same shim the Node server uses, so `env` is built from .dev.vars +
- * process.env exactly like production-on-Node.
+ * (Postgres, Redis proxy, GreenMail). `env` is built from .dev.vars +
+ * process.env by src/env.ts, exactly like the production Node processes.
  */
 export default defineConfig({
-  resolve: {
-    alias: {
-      'cloudflare:workers': fileURLToPath(new URL('./src/node/cf-shim.mjs', import.meta.url)),
-      'cloudflare:email': fileURLToPath(new URL('./src/node/cf-shim.mjs', import.meta.url)),
-    },
-  },
   test: {
     include: ['tests/integration/**/*.test.ts'],
     testTimeout: 120_000,

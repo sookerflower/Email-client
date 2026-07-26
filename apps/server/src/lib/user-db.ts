@@ -34,7 +34,7 @@ export class UserDb {
   constructor(private userId: string) {}
 
   private get db(): DB {
-    const { db } = createDb(env.HYPERDRIVE.connectionString);
+    const { db } = createDb(env.DATABASE_URL);
     return db;
   }
 

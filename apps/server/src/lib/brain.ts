@@ -4,7 +4,7 @@ import { getSubscriptionFactory } from './factories/subscription-factory.registr
 import { AiChatPrompt, StyledEmailAssistantSystemPrompt } from './prompts';
 import { resetConnection } from './server-utils';
 import { EPrompts, EProviders } from '../types';
-import { getPromptName } from '../pipelines';
+import { getPromptName } from './prompts';
 
 export const enableBrainFunction = async (connection: { id: string; providerId: EProviders }) => {
   try {

@@ -131,7 +131,7 @@ async function processSendJob(job: Job): Promise<unknown> {
 
 /** Enqueue a sent-folder sync for every IMAP connection (bug #2 fix). */
 async function scheduleSentFolderSyncs(): Promise<{ scheduled: number }> {
-  const { db } = createDb(env.HYPERDRIVE.connectionString);
+  const { db } = createDb(env.DATABASE_URL);
   const rows = await db.query.connection.findMany({
     where: eq(connectionSchema.providerId, 'imap'),
     columns: { id: true },

@@ -1,10 +1,9 @@
 import { subscriptionStore, labelConfigStore, promptStore } from '../../lib/stores';
 import { getOrGenerateThreadSummary } from '../../lib/summary-service';
 import { disableBrainFunction, getPrompts } from '../../lib/brain';
-import { EProviders, EPrompts, type ISubscribeBatch } from '../../types';
+import { EProviders, EPrompts } from '../../types';
 import { activeConnectionProcedure, router } from '../trpc';
 import { setSubscribedState } from '../../lib/utils';
-import { env } from '../../env';
 import { z } from 'zod';
 
 const labelSchema = z.object({
@@ -18,10 +17,13 @@ export const brainRouter = router({
   enableBrain: activeConnectionProcedure.mutation(async ({ ctx }) => {
     const connection = ctx.activeConnection as { id: string; providerId: EProviders };
     await setSubscribedState(connection.id, connection.providerId);
-    await env.subscribe_queue.send({
+    // Future-Gmail-push mapping (dormant — see MIGRATION-PLAN §3): the CF
+    // subscribe_queue became a no-op on the Node port; the revived pipeline
+    // enqueues a worker-hosted BullMQ subscription job here instead.
+    console.log('[brain] subscription enqueue skipped (Gmail sync dormant)', {
       connectionId: connection.id,
       providerId: connection.providerId,
-    } as ISubscribeBatch);
+    });
     return true;
     // return await enableBrainFunction(connection);
   }),

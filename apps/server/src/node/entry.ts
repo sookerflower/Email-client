@@ -1,15 +1,10 @@
 /**
- * Node.js entrypoint for the zero-server Hono app (Path B migration, Phase 0).
+ * Node.js entrypoint for the zero-server Hono app (Path B migration).
  *
- * Run from apps/server:
- *   node --import tsx --import ./src/node/cf-hook.mjs src/node/entry.ts
- * (or `pnpm dev:node`).
- *
- * Serves the same `app` that workerd serves. Cloudflare bindings resolve to
- * the shim in cf-shim.mjs: auth (Google OAuth + Custom IMAP/SMTP), tRPC, and
- * anything Postgres/sidecar-backed works; mail-engine features that still
- * live in Durable Objects fail loudly with NotPortedError until their
- * migration phase lands.
+ * Run from apps/server: `pnpm dev` (esbuild bundle -> dist-node/server.mjs).
+ * Auth (Google OAuth + Custom IMAP/SMTP), tRPC, chat, and the SSE realtime
+ * relay all serve from here; IMAP sockets live exclusively in the worker
+ * process (dist-node/worker.mjs).
  */
 import { serve } from '@hono/node-server';
 import { app } from '../main';
@@ -35,7 +30,11 @@ const port = Number(process.env.PORT || 8787);
 
 serve(
   {
-    fetch: (request) => app.fetch(request, env as never, executionCtx as never),
+    // Merge @hono/node-server's per-request env ({ incoming, outgoing })
+    // into ours: getConnInfo (rate-limit IPs) reads c.env.incoming.socket,
+    // app code reads the ZeroEnv vars — both live on c.env.
+    fetch: (request, nodeEnv) =>
+      app.fetch(request, Object.assign({}, env, nodeEnv) as never, executionCtx as never),
     port,
     hostname: process.env.HOST || '127.0.0.1',
   },

@@ -60,8 +60,6 @@ const worker = startMailWorker({
   enqueueSend: (messageId, connectionId, sendAt) =>
     enqueueSendEmail(messageId, connectionId, new Date(sendAt)),
   cancelSend: cancelSendEmail,
-  // Legacy sidecar JSON store, imported once if still present.
-  legacyLabelStorePath: join(process.cwd(), 'imap-sidecar', '.label-store.json'),
 });
 
 let jobs: JobRuntime | null = null;

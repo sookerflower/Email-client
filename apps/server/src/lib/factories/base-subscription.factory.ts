@@ -30,7 +30,7 @@ export abstract class BaseSubscriptionFactory {
 
   protected async getConnectionFromDb(connectionId: string) {
     // Revisit
-    const { db, conn } = createDb(env.HYPERDRIVE.connectionString);
+    const { db, conn } = createDb(env.DATABASE_URL);
     const connectionData = await db.query.connection.findFirst({
       where: eq(connection.id, connectionId),
     });

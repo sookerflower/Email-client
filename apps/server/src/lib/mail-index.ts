@@ -30,7 +30,7 @@ import { env } from '../env';
  * cursors) for compatibility.
  */
 
-const db = () => createDb(env.HYPERDRIVE.connectionString).db;
+const db = () => createDb(env.DATABASE_URL).db;
 
 export type IndexThread = {
   id: string;

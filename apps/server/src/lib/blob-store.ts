@@ -1,16 +1,12 @@
-import { isNodeRuntime } from './runtime';
-import { env } from '../env';
-
 /**
- * Thread-body blob storage (Phase 2 of MIGRATION-PLAN.md §6, replaces R2
+ * Thread-body blob storage (Phase 2 of MIGRATION-PLAN.md §6, replaced R2
  * THREADS_BUCKET). Stores parsed thread JSON, one object per thread, keyed
  * `{connectionId}/{threadId}.json`. Contents are rebuildable from the IMAP
  * server on miss, so losing a blob costs a re-sync, never data.
  *
- * On Node: files under DATA_DIR (default ./data/threads). On workerd: the R2
- * bucket, unchanged (deleted with the rest of the wrangler config at
- * cutover). The interface is S3-compatible-shaped so a MinIO impl can slot in
- * if this ever goes multi-node.
+ * Files live under DATA_DIR (default ./data/threads). The interface is
+ * S3-compatible-shaped so a MinIO impl can slot in if this ever goes
+ * multi-node.
  */
 export interface BlobStore {
   get(key: string): Promise<string | null>;
@@ -60,29 +56,11 @@ class FsBlobStore implements BlobStore {
   }
 }
 
-class R2BlobStore implements BlobStore {
-  async get(key: string): Promise<string | null> {
-    const object = await env.THREADS_BUCKET.get(key);
-    if (!object) return null;
-    return await object.text();
-  }
-
-  async put(key: string, value: string): Promise<void> {
-    await env.THREADS_BUCKET.put(key, value);
-  }
-
-  async delete(key: string): Promise<void> {
-    await env.THREADS_BUCKET.delete(key);
-  }
-}
-
 let cached: BlobStore | null = null;
 
 export const getThreadBlobStore = (): BlobStore => {
   if (!cached) {
-    cached = isNodeRuntime
-      ? new FsBlobStore(`${process.env.DATA_DIR || './data'}/threads`)
-      : new R2BlobStore();
+    cached = new FsBlobStore(`${process.env.DATA_DIR || './data'}/threads`);
   }
   return cached;
 };

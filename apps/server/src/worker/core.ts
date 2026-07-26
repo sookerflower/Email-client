@@ -16,7 +16,7 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { createHash } from 'node:crypto';
 import { ImapFlow } from 'imapflow';
 
-import { createPgLabelStore, migrateJsonLabelStore } from '../lib/imap-label-store';
+import { createPgLabelStore } from '../lib/imap-label-store';
 import { ImapSmtpMailManager, type LabelStore } from '../lib/driver/imap';
 import { createSocketCensus } from './socket-census';
 import { decryptPassword } from '../lib/driver/imap-crypto';
@@ -50,8 +50,6 @@ export interface MailWorkerOptions {
    */
   enqueueSend?: (messageId: string, connectionId: string, sendAt: number) => Promise<void>;
   cancelSend?: (messageId: string) => Promise<void>;
-  /** Optional legacy .label-store.json to import once at boot. */
-  legacyLabelStorePath?: string;
 }
 
 const IDLE_MS = 5 * 60 * 1000; // dispose a driver after 5 min idle
@@ -91,9 +89,6 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
   if (!opts.databaseUrl) throw new Error('databaseUrl is required');
 
   const labelStore: LabelStore = createPgLabelStore(opts.databaseUrl);
-  if (opts.legacyLabelStorePath) {
-    void migrateJsonLabelStore(opts.legacyLabelStorePath, labelStore);
-  }
 
   // --- Driver cache: reuse IMAP connections per mailbox ----------------------
   const cache = new Map<string, CacheEntry>();

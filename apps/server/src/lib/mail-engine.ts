@@ -67,7 +67,7 @@ export class MailEngine {
 
   static async init(connectionId: string): Promise<MailEngine> {
     const { connectionToDriver } = await import('./server-utils');
-    const { db } = createDb(env.HYPERDRIVE.connectionString);
+    const { db } = createDb(env.DATABASE_URL);
     const row = await db.query.connection.findFirst({
       where: (fields, { eq }) => eq(fields.id, connectionId),
     });

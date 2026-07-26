@@ -1,33 +1,27 @@
-import type { ThreadSyncWorker, WorkflowRunner, ZeroDB } from './main';
-import type { ShardRegistry, ZeroDriver } from './routes/agent';
-
-import { env as _env } from 'cloudflare:workers';
+/**
+ * Environment (Phase 6.4 of MIGRATION-PLAN.md — plain process-env typing).
+ *
+ * The workerd path is gone; env is Node's process.env, merged at module load
+ * from (lowest to highest precedence):
+ *   local defaults below → .dev.vars (wrangler's dotenv format, kept as the
+ *   gitignored local secrets file) → the real process environment.
+ * The merge is mirrored INTO process.env because libraries like better-auth
+ * (secret resolution) and googleapis read process.env directly.
+ */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 export type ZeroEnv = {
-  ZERO_DRIVER: DurableObjectNamespace<ZeroDriver>;
-  SHARD_REGISTRY: DurableObjectNamespace<ShardRegistry>;
-  ZERO_DB: DurableObjectNamespace<ZeroDB>;
-  WORKFLOW_RUNNER: DurableObjectNamespace<WorkflowRunner>;
-
-  THREAD_SYNC_WORKER: DurableObjectNamespace<ThreadSyncWorker>;
-  SYNC_THREADS_WORKFLOW: Workflow;
-  SYNC_THREADS_COORDINATOR_WORKFLOW: Workflow;
-  HYPERDRIVE: { connectionString: string };
-  send_email_queue: Queue;
-  subscribe_queue: Queue;
-  AI: Ai;
   NODE_ENV: 'local' | 'development' | 'production';
-  JWT_SECRET: 'secret';
-  ELEVENLABS_API_KEY: '1234567890';
+  JWT_SECRET: string;
+  ELEVENLABS_API_KEY: string;
   DISABLE_CALLS: 'true' | '';
-  DROP_AGENT_TABLES: 'false';
-  THREAD_SYNC_MAX_COUNT: '5' | '20' | '10';
-  THREAD_SYNC_LOOP: 'false' | 'true';
-  DISABLE_WORKFLOWS: 'true';
-  AUTORAG_ID: '';
-  USE_OPENAI: 'true';
-  CLOUDFLARE_ACCOUNT_ID: '';
-  CLOUDFLARE_API_TOKEN: '';
+  DROP_AGENT_TABLES: string;
+  THREAD_SYNC_MAX_COUNT: string;
+  THREAD_SYNC_LOOP: string;
+  DISABLE_WORKFLOWS: string;
+  AUTORAG_ID: string;
+  USE_OPENAI: string;
   BASE_URL: string;
   VITE_PUBLIC_APP_URL: string;
   DATABASE_URL: string;
@@ -63,11 +57,11 @@ export type ZeroEnv = {
   TWILIO_ACCOUNT_SID: string;
   TWILIO_AUTH_TOKEN: string;
   TWILIO_PHONE_NUMBER: string;
-  // IMAP transport sidecar (see apps/server/imap-sidecar/server.ts)
+  // IMAP transport worker (src/worker/) — owns all IMAP sockets.
   IMAP_SIDECAR_URL: string;
   IMAP_SIDECAR_SECRET: string;
-  // Encrypts the imap connection password on save (worker) and decrypts it in
-  // the sidecar on use. 64 hex chars (32 bytes).
+  // Encrypts the imap connection password on save (api) and decrypts it in
+  // the worker on use. 64 hex chars (32 bytes).
   IMAP_ENCRYPTION_KEY: string;
   // Default mail server for the "Custom IMAP/SMTP" login form, so users only
   // type email + password. Optional; the form accepts overrides.
@@ -88,8 +82,6 @@ export type ZeroEnv = {
   GOOGLE_S_ACCOUNT: string;
   AXIOM_API_TOKEN: string;
   AXIOM_DATASET: string;
-  THREADS_BUCKET: R2Bucket;
-  thread_queue: Queue;
   DEV_PROXY: string;
   MEET_AUTH_HEADER: string;
   MEET_API_URL: string;
@@ -99,5 +91,64 @@ export type ZeroEnv = {
   OTEL_SERVICE_NAME?: string;
 };
 
-const env = _env as ZeroEnv;
+// Local-dev defaults (formerly wrangler.jsonc [env.local].vars). Real
+// deployments override via the environment or .dev.vars.
+const localDefaults: Record<string, string> = {
+  NODE_ENV: 'local',
+  COOKIE_DOMAIN: 'localhost',
+  VITE_PUBLIC_BACKEND_URL: 'http://localhost:8787',
+  VITE_PUBLIC_APP_URL: 'http://localhost:3000',
+  JWT_SECRET: 'secret',
+  ELEVENLABS_API_KEY: '1234567890',
+  DISABLE_CALLS: 'true',
+  VOICE_SECRET: '1234567890',
+  GOOGLE_S_ACCOUNT: '{}',
+  DROP_AGENT_TABLES: 'false',
+  THREAD_SYNC_MAX_COUNT: '60',
+  THREAD_SYNC_LOOP: 'false',
+  DISABLE_WORKFLOWS: 'true',
+  AUTORAG_ID: '',
+  USE_OPENAI: 'true',
+  MEET_AUTH_HEADER: '',
+  DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/zerodotemail',
+  OTEL_EXPORTER_OTLP_ENDPOINT: 'https://api.axiom.co/v1/traces',
+  OTEL_SERVICE_NAME: 'zero-email-server-local',
+};
+
+// Minimal dotenv parse for the .dev.vars format.
+const parseDotenv = (text: string): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq === -1) continue;
+    const key = line.slice(0, eq).trim();
+    let value = line.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    out[key] = value;
+  }
+  return out;
+};
+
+const serverDir = process.env.ZERO_SERVER_DIR || process.cwd();
+let devVars: Record<string, string> = {};
+try {
+  devVars = parseDotenv(readFileSync(join(serverDir, '.dev.vars'), 'utf8'));
+} catch {
+  console.warn(`[env] no .dev.vars found in ${serverDir}; using process.env only`);
+}
+
+for (const [key, value] of Object.entries({ ...localDefaults, ...devVars })) {
+  if (process.env[key] === undefined) {
+    process.env[key] = value;
+  }
+}
+
+const env = process.env as unknown as ZeroEnv;
 export { env };

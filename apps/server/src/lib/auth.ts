@@ -150,7 +150,13 @@ const connectionHandlerHook = async (account: Account) => {
   }
 
   if (env.GOOGLE_S_ACCOUNT && env.GOOGLE_S_ACCOUNT !== '{}') {
-    await env.subscribe_queue.send({
+    // Future-Gmail-push mapping (dormant — see MIGRATION-PLAN §3): this was
+    // the CF subscribe_queue send that registered Gmail Pub/Sub watch
+    // renewals. When the Gmail sync pipeline is revived it becomes a BullMQ
+    // job in the worker (repeatable renewal, like the outbox sweeps). Until
+    // then: log and drop, exactly what the Node shim did — this must never
+    // throw, it sits on the login callback path.
+    console.log('[auth] Gmail watch subscription skipped (Gmail sync dormant)', {
       connectionId: result.id,
       providerId: account.providerId,
     });
@@ -322,7 +328,7 @@ export const createAuth = () => {
 
 const createAuthConfig = () => {
   const cache = redis();
-  const { db } = createDb(env.HYPERDRIVE.connectionString);
+  const { db } = createDb(env.DATABASE_URL);
   return {
     database: drizzleAdapter(db, { provider: 'pg' }),
     secondaryStorage: {

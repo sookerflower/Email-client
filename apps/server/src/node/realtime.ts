@@ -89,7 +89,7 @@ export function registerRealtimeRoutes(app: Hono<HonoContext>): void {
       return c.json({ error: 'Unauthorized' }, 401);
     }
 
-    const { db } = createDb(env.HYPERDRIVE.connectionString);
+    const { db } = createDb(env.DATABASE_URL);
     const row = await db.query.connection.findFirst({
       where: (fields, { eq }) => eq(fields.id, connectionId),
       columns: { id: true, userId: true },

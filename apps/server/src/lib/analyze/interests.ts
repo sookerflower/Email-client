@@ -17,7 +17,7 @@
 import { generateObject } from 'ai';
 import { openai } from '../ai-provider';
 import { z } from 'zod';
-import { env } from 'cloudflare:workers';
+import { env } from '../../env';
 
 export interface GenerateTopicsOptions {
   sampleSize?: number;

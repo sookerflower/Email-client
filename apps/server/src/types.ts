@@ -239,7 +239,7 @@ export enum Tools {
   GetCurrentDate = 'getCurrentDate',
 }
 
-export type AppContext = Context<{ Bindings: Env }>;
+export type AppContext = Context<{ Bindings: import('./env').ZeroEnv }>;
 
 export enum EPrompts {
   SummarizeMessage = 'SummarizeMessage',

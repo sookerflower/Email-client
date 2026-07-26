@@ -1,6 +1,11 @@
 import { format } from 'date-fns';
-import { Tools } from '../types';
+import { Tools, type EPrompts } from '../types';
 import dedent from 'dedent';
+
+/** Storage key for a connection-scoped prompt (moved from the deleted CF pipelines module). */
+export const getPromptName = (connectionId: string, prompt: EPrompts) => {
+  return `${connectionId}-${prompt}`;
+};
 
 export const colors = [
   '#000000',

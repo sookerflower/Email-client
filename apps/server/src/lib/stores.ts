@@ -20,7 +20,7 @@ import { env } from '../env';
  * idempotent writes, never from a Redis lock (Kleppmann rule).
  */
 
-const db = () => createDb(env.HYPERDRIVE.connectionString).db;
+const db = () => createDb(env.DATABASE_URL).db;
 
 // ---------------------------------------------------------------------------
 // Ephemeral: Redis (was KV `gmail_processing_threads`)

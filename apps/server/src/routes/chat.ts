@@ -42,7 +42,7 @@ import { processToolCalls } from './agent/utils';
 import { anthropic } from '@ai-sdk/anthropic';
 import { AiChatPrompt } from '../lib/prompts';
 import { getPrompt } from '../pipelines.effect';
-import { getPromptName } from '../pipelines';
+import { getPromptName } from '../lib/prompts';
 import { openai } from '../lib/ai-provider';
 import { EPrompts, Tools } from '../types';
 import { chatMessage } from '../db/schema';
@@ -83,7 +83,7 @@ const sequentialThinkingTool = () => {
   });
 };
 
-const db = () => createDb(env.HYPERDRIVE.connectionString).db;
+const db = () => createDb(env.DATABASE_URL).db;
 
 /** Upsert-by-id keeps re-sent conversations idempotent. */
 async function persistChatMessages(connectionId: string, messages: Message[]): Promise<void> {

@@ -1,5 +1,4 @@
 import { paraglideVitePlugin } from '@inlang/paraglide-js';
-import { cloudflare } from '@cloudflare/vite-plugin';
 import { reactRouter } from '@react-router/dev/vite';
 import tsconfigPaths from 'vite-tsconfig-paths';
 import babel from 'vite-plugin-babel';
@@ -14,7 +13,6 @@ const ReactCompilerConfig = {
 export default defineConfig({
   plugins: [
     reactRouter(),
-    cloudflare(),
     babel({
       filter: /\.[jt]sx?$/,
       babelConfig: {

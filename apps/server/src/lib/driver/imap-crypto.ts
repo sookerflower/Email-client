@@ -35,7 +35,7 @@ const hexToBytes = (hex: string): Uint8Array => {
   return bytes;
 };
 
-const importKey = async (keyHex: string): Promise<CryptoKey> =>
+const importKey = async (keyHex: string): Promise<import('node:crypto').webcrypto.CryptoKey> =>
   crypto.subtle.importKey('raw', hexToBytes(keyHex), { name: 'AES-GCM' }, false, [
     'encrypt',
     'decrypt',

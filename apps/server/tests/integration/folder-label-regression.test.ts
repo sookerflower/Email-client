@@ -45,7 +45,7 @@ const { MailEngine } = await import('../../src/lib/mail-engine');
 const { ImapSmtpMailManager } = await import('../../src/lib/driver/imap');
 const { env } = await import('../../src/env');
 
-const db = createDb(env.HYPERDRIVE.connectionString).db;
+const db = createDb(env.DATABASE_URL).db;
 
 const runId = crypto.randomUUID().slice(0, 8);
 const address = `regress-${runId}@classroom.test`;

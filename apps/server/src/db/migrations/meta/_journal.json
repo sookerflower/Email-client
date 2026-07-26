@@ -309,6 +309,13 @@
       "when": 1785052745439,
       "tag": "0042_gifted_susan_delgado",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1785055478142,
+      "tag": "0043_red_proteus",
+      "breakpoints": true
     }
   ]
 }

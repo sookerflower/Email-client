@@ -506,6 +506,32 @@ export const chatMessage = createTable(
 );
 
 /**
+ * Per-folder UID -> thread ledger (Phase 6.2 incremental sync). Bounded by
+ * the sync window (~last N messages per folder): incremental deletion
+ * detection is impossible without it — a vanished UID can no longer be
+ * fetched to learn which thread it belonged to. `flags` is the sorted
+ * flag list joined with \x01, used by the UID-diff floor to detect flag
+ * changes without CONDSTORE.
+ */
+export const folderMessage = createTable(
+  'folder_message',
+  {
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => connection.id, { onDelete: 'cascade' }),
+    folder: text('folder').notNull(),
+    uid: bigint('uid', { mode: 'number' }).notNull(),
+    threadId: text('thread_id').notNull(),
+    flags: text('flags').notNull().default(''),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.connectionId, t.folder, t.uid] }),
+    index('folder_message_thread_idx').on(t.connectionId, t.folder, t.threadId),
+  ],
+);
+
+/**
  * IMAP label registry (Phase 3.2 of MIGRATION-PLAN.md): backing store for the
  * driver's `$zl_` keyword-label registry, previously the sidecar's
  * .label-store.json file. Opaque key -> JSON string, keys shaped
@@ -542,6 +568,12 @@ export const folderSyncState = createTable(
      * server (the Nylas lesson).
      */
     resyncCount: integer('resync_count').notNull().default(0),
+    /**
+     * Which ladder rung the last sync ran (Phase 6.2): 'full' | 'condstore'
+     * | 'uid-diff'. Surfaced so tests and operators can see a silent fall
+     * to the slow floor.
+     */
+    syncMode: text('sync_mode'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },

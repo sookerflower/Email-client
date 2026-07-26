@@ -1,5 +1,18 @@
-import { thread, label, threadLabel, folderSyncState } from '../db/schema';
-import { eq, and, count, inArray, sql, desc, lt, or, ilike, isNotNull } from 'drizzle-orm';
+import { thread, label, threadLabel, folderSyncState, folderMessage } from '../db/schema';
+import {
+  eq,
+  and,
+  count,
+  inArray,
+  notInArray,
+  like,
+  sql,
+  desc,
+  lt,
+  or,
+  ilike,
+  isNotNull,
+} from 'drizzle-orm';
 import type { Sender } from '../types';
 import { createDb } from '../db';
 import { env } from '../env';
@@ -101,6 +114,25 @@ export const upsertThread = async (
         updatedAt: values.updatedAt,
       },
     });
+
+  // Tag-derived labels (UNREAD/STARRED/$keywords) are wholly derived from
+  // the fresh message flags, so stale ones must be REMOVED — add-only label
+  // writes could never clear UNREAD after a \Seen flip (defect exposed by
+  // the Phase 6.2 incremental-equivalence oracle; it silently affected the
+  // full-refetch path too). Folder labels (each folder's own sync
+  // contributes its own) and app-managed labels (TRASH/SNOOZED) stay
+  // add-only here.
+  const kept = labelIds ?? [];
+  await db()
+    .delete(threadLabel)
+    .where(
+      and(
+        eq(threadLabel.connectionId, connectionId),
+        eq(threadLabel.threadId, data.threadId),
+        or(inArray(threadLabel.labelId, ['UNREAD', 'STARRED']), like(threadLabel.labelId, '$%')),
+        kept.length ? notInArray(threadLabel.labelId, kept) : sql`true`,
+      ),
+    );
 
   if (labelIds?.length) {
     await ensureLabels(connectionId, labelIds);
@@ -360,7 +392,13 @@ export const upsertFolderSyncState = async (
   values: Partial<
     Pick<
       FolderSyncRow,
-      'uidValidity' | 'uidNext' | 'highestModseq' | 'pageToken' | 'lastSyncedAt' | 'resyncCount'
+      | 'uidValidity'
+      | 'uidNext'
+      | 'highestModseq'
+      | 'pageToken'
+      | 'lastSyncedAt'
+      | 'resyncCount'
+      | 'syncMode'
     >
   >,
 ): Promise<void> => {
@@ -384,6 +422,85 @@ export const listThreadIdsByLabel = async (
     .from(threadLabel)
     .where(and(eq(threadLabel.connectionId, connectionId), eq(threadLabel.labelId, labelId)));
   return rows.map((r) => r.threadId);
+};
+
+// ---------------------------------------------------------------------------
+// Folder UID -> thread ledger (Phase 6.2). Bounded by the sync window; the
+// incremental path cannot attribute a DELETED message to its thread any
+// other way (the message can no longer be fetched).
+// ---------------------------------------------------------------------------
+
+export type LedgerEntry = { uid: number; threadId: string; flags: string };
+
+export const getFolderLedger = async (
+  connectionId: string,
+  folder: string,
+): Promise<LedgerEntry[]> => {
+  const rows = await db()
+    .select({ uid: folderMessage.uid, threadId: folderMessage.threadId, flags: folderMessage.flags })
+    .from(folderMessage)
+    .where(and(eq(folderMessage.connectionId, connectionId), eq(folderMessage.folder, folder)));
+  return rows;
+};
+
+/** Wholesale ledger replacement after a full sync's snapshot. */
+export const replaceFolderLedger = async (
+  connectionId: string,
+  folder: string,
+  entries: LedgerEntry[],
+): Promise<void> => {
+  await db()
+    .delete(folderMessage)
+    .where(and(eq(folderMessage.connectionId, connectionId), eq(folderMessage.folder, folder)));
+  if (entries.length) {
+    await db()
+      .insert(folderMessage)
+      .values(entries.map((e) => ({ connectionId, folder, ...e })));
+  }
+};
+
+/** Incremental ledger update: drop vanished UIDs, upsert changed/new ones. */
+export const applyFolderLedgerDelta = async (
+  connectionId: string,
+  folder: string,
+  changes: { vanishedUids: number[]; messages: LedgerEntry[] },
+): Promise<void> => {
+  if (changes.vanishedUids.length) {
+    await db()
+      .delete(folderMessage)
+      .where(
+        and(
+          eq(folderMessage.connectionId, connectionId),
+          eq(folderMessage.folder, folder),
+          inArray(folderMessage.uid, changes.vanishedUids),
+        ),
+      );
+  }
+  for (const entry of changes.messages) {
+    await db()
+      .insert(folderMessage)
+      .values({ connectionId, folder, ...entry })
+      .onConflictDoUpdate({
+        target: [folderMessage.connectionId, folderMessage.folder, folderMessage.uid],
+        set: { threadId: entry.threadId, flags: entry.flags, updatedAt: new Date() },
+      });
+  }
+};
+
+export const clearFolderLedger = async (connectionId: string, folder?: string): Promise<void> => {
+  await db()
+    .delete(folderMessage)
+    .where(
+      folder
+        ? and(eq(folderMessage.connectionId, connectionId), eq(folderMessage.folder, folder))
+        : eq(folderMessage.connectionId, connectionId),
+    );
+};
+
+/** Full sync-state reset (forceReSync): cursors AND ledger go together. */
+export const clearFolderSyncData = async (connectionId: string): Promise<void> => {
+  await db().delete(folderSyncState).where(eq(folderSyncState.connectionId, connectionId));
+  await clearFolderLedger(connectionId);
 };
 
 export const getFolderSyncPageToken = async (

@@ -339,6 +339,176 @@ export class ImapSmtpMailManager implements MailManager {
   // ------------------------------------------------------------------
 
   /**
+   * Incremental folder delta (Phase 6.2 ladder). Given the last sync's
+   * cursor, returns which threads changed, which known UIDs vanished, and
+   * the new cursor — via the best mechanism the server supports:
+   *
+   *  - `condstore`: FETCH 1:* (CHANGEDSINCE modseq) — new + flag-changed
+   *    messages in one pass. (True QRESYNC SELECT/VANISHED is not exposed
+   *    by imapflow; deletions use the same UID presence scan as the floor,
+   *    one cheap uid-only round trip. Servers advertising QRESYNC run this
+   *    rung and record `condstore`.)
+   *  - `uid-diff` floor: new mail via `uidNext:*` fetch; flag changes via a
+   *    bounded flags-only sweep of the caller's known window, diffed
+   *    against the ledger's stored flags.
+   *
+   * Deletions (both rungs): uid-only scan of the mailbox; every known UID
+   * not present has vanished. Cursor `null` = snapshot mode: return the
+   * newest `windowSize` messages so the caller can rebuild its ledger
+   * after a full sync.
+   */
+  public fetchFolderDelta(
+    folder: string,
+    cursor: {
+      uidValidity: number;
+      uidNext: number;
+      highestModseq: string | null;
+      known: { uid: number; flags: string }[];
+    } | null,
+    windowSize = 60,
+  ) {
+    return this.withErrorHandler(
+      'fetchFolderDelta',
+      async () => {
+        const path = await this.resolveFolder(this.folderKindFromZeroName(folder));
+        if (!path) return null;
+        const client = await this.connect();
+        const mailbox = await client.mailboxOpen(path);
+
+        const newCursor = {
+          uidValidity: Number(mailbox.uidValidity),
+          uidNext: Number(mailbox.uidNext),
+          highestModseq: mailbox.highestModseq != null ? String(mailbox.highestModseq) : null,
+        };
+        const fetchQuery = {
+          envelope: true,
+          flags: true,
+          uid: true,
+          headers: ['references', 'in-reply-to', 'message-id'],
+        };
+        const flagString = (flags: Set<string>) => [...flags].sort().join('\x01');
+        const toMessages = (metas: MessageMeta[]) => {
+          // Thread ids must match list()'s grouping — same threading module,
+          // same root derivation.
+          const groups = groupIntoThreads(metas);
+          const byUid = new Map<number, { threadId: string; flags: string }>();
+          for (const g of groups) {
+            const threadId = encodeThreadId(g.rootId);
+            for (const m of g.messages) {
+              byUid.set(m.uid, { threadId, flags: flagString(m.flags) });
+            }
+          }
+          return [...byUid.entries()].map(([uid, v]) => ({ uid, ...v }));
+        };
+
+        // Snapshot mode: ledger rebuild after a full sync.
+        if (!cursor) {
+          const metas: MessageMeta[] = [];
+          if (mailbox.exists > 0) {
+            const start = Math.max(1, mailbox.exists - windowSize + 1);
+            for await (const item of client.fetch(`${start}:${mailbox.exists}`, fetchQuery)) {
+              metas.push(this.toMessageMeta(item));
+            }
+          }
+          return {
+            mode: 'snapshot' as const,
+            fullResyncRequired: false,
+            messages: toMessages(metas),
+            vanishedUids: [] as number[],
+            newCursor,
+          };
+        }
+
+        // Belt and braces — the engine's UIDVALIDITY guard runs first, but
+        // never trust a cursor across a validity change.
+        if (newCursor.uidValidity !== cursor.uidValidity) {
+          return {
+            mode: 'full' as const,
+            fullResyncRequired: true,
+            messages: [],
+            vanishedUids: [] as number[],
+            newCursor,
+          };
+        }
+
+        const changedMetas: MessageMeta[] = [];
+        const supportsCondstore =
+          (client.capabilities.has('CONDSTORE') || client.capabilities.has('QRESYNC')) &&
+          cursor.highestModseq != null &&
+          newCursor.highestModseq != null;
+        let mode: 'condstore' | 'uid-diff';
+
+        if (supportsCondstore) {
+          mode = 'condstore';
+          if (
+            mailbox.exists > 0 &&
+            BigInt(newCursor.highestModseq!) > BigInt(cursor.highestModseq!)
+          ) {
+            for await (const item of client.fetch('1:*', fetchQuery, {
+              uid: true,
+              changedSince: BigInt(cursor.highestModseq!),
+            })) {
+              changedMetas.push(this.toMessageMeta(item));
+            }
+          }
+        } else {
+          mode = 'uid-diff';
+          // New arrivals.
+          if (mailbox.exists > 0 && newCursor.uidNext > cursor.uidNext) {
+            for await (const item of client.fetch(`${cursor.uidNext}:*`, fetchQuery, {
+              uid: true,
+            })) {
+              if (item.uid >= cursor.uidNext) changedMetas.push(this.toMessageMeta(item));
+            }
+          }
+          // Flag convergence: bounded flags-only sweep of the known window.
+          if (cursor.known.length && mailbox.exists > 0) {
+            const knownByUid = new Map(cursor.known.map((k) => [k.uid, k.flags]));
+            const changedUids: number[] = [];
+            for await (const item of client.fetch(
+              cursor.known.map((k) => k.uid).join(','),
+              { uid: true, flags: true },
+              { uid: true },
+            )) {
+              const flags = flagString(item.flags ?? new Set());
+              if (knownByUid.has(item.uid) && knownByUid.get(item.uid) !== flags) {
+                changedUids.push(item.uid);
+              }
+            }
+            if (changedUids.length) {
+              for await (const item of client.fetch(changedUids.join(','), fetchQuery, {
+                uid: true,
+              })) {
+                changedMetas.push(this.toMessageMeta(item));
+              }
+            }
+          }
+        }
+
+        // Deletions (both rungs): every known UID missing from the mailbox.
+        const presentUids = new Set<number>();
+        if (mailbox.exists > 0) {
+          for await (const item of client.fetch('1:*', { uid: true })) {
+            presentUids.add(item.uid);
+          }
+        }
+        const vanishedUids = cursor.known
+          .map((k) => k.uid)
+          .filter((uid) => !presentUids.has(uid));
+
+        return {
+          mode,
+          fullResyncRequired: false,
+          messages: toMessages(changedMetas),
+          vanishedUids,
+          newCursor,
+        };
+      },
+      { folder, email: this.config.auth.email },
+    );
+  }
+
+  /**
    * Folder state for the UIDVALIDITY guard / incremental sync (Phase 6).
    * Uses STATUS so the connection's selected mailbox is untouched.
    */

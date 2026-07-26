@@ -698,16 +698,21 @@ if (REAL) {
       return body.result;
     };
     let deleted = 0;
-    const listing = await rpc('list', [{ folder: 'inbox', maxResults: 20 }]);
-    for (const t of listing.threads ?? []) {
-      if ((t.$raw?.subject ?? '').includes(runId)) {
-        try {
-          await rpc('delete', [t.id]);
-          deleted++;
-        } catch {
-          // best-effort
+    try {
+      const listing = await rpc('list', [{ folder: 'inbox', maxResults: 20 }]);
+      for (const t of listing.threads ?? []) {
+        if ((t.$raw?.subject ?? '').includes(runId)) {
+          try {
+            await rpc('delete', [t.id]);
+            deleted++;
+          } catch {
+            // best-effort
+          }
         }
       }
+    } catch (error) {
+      // Best-effort means best-effort: transient failures never fail a run.
+      return `cleanup skipped (best-effort): ${error.message}`;
     }
     return `${deleted} thread(s) of run ${runId} hard-deleted from the real server`;
   });

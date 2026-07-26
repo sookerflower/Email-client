@@ -116,6 +116,26 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
     return entry.driver.dispose().catch(() => undefined);
   };
 
+  // Per-driver operation serialization (Phase 6.2). Every /rpc call is one
+  // complete driver method, but different callers (worker jobs, api tRPC,
+  // E2E polling) share ONE cached IMAP connection — and a concurrent op
+  // that opens a different mailbox between another op's commands makes
+  // multi-fetch sequences read the WRONG mailbox (observed live: a folder
+  // delta's uid scan returned another folder's uids, producing false
+  // "vanished" messages and wrongful thread removals). Serializing whole
+  // methods per driver makes each sequence atomic w.r.t. selection; the
+  // single connection was serializing raw commands anyway.
+  const opChains = new Map<string, Promise<unknown>>();
+  const withDriverLock = <T>(key: string, fn: () => Promise<T>): Promise<T> => {
+    const prev = opChains.get(key) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    opChains.set(
+      key,
+      next.catch(() => undefined),
+    );
+    return next;
+  };
+
   /**
    * Errors that mean "the cached IMAP connection is dead", not "the request
    * is wrong": imapflow surfaces post-drop command failures as bare
@@ -440,7 +460,8 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
       if (typeof fn !== 'function') {
         throw Object.assign(new Error(`Unknown method: ${method}`), { code: 'EUNKNOWN_METHOD' });
       }
-      return await fn.apply(driver, args);
+      const lockKey = auth.imap ? cacheKey(auth.imap) : method;
+      return await withDriverLock(lockKey, () => fn.apply(driver, args));
     };
 
     try {

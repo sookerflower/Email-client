@@ -102,9 +102,36 @@ export interface FolderState {
   messages: number | null;
 }
 
+/** One ledger entry produced by fetchFolderDelta (Phase 6.2). */
+export interface FolderDeltaMessage {
+  uid: number;
+  threadId: string;
+  /** Sorted flags joined with \x01 — change detection on the UID-diff floor. */
+  flags: string;
+}
+
+export interface FolderDeltaCursor {
+  uidValidity: number;
+  uidNext: number;
+  highestModseq: string | null;
+}
+
+export interface FolderDelta {
+  mode: 'snapshot' | 'full' | 'condstore' | 'uid-diff';
+  fullResyncRequired: boolean;
+  messages: FolderDeltaMessage[];
+  vanishedUids: number[];
+  newCursor: FolderDeltaCursor;
+}
+
 export interface MailManager {
   config: ManagerConfig;
   getFolderState?(folder: string): Promise<FolderState | null>;
+  fetchFolderDelta?(
+    folder: string,
+    cursor: (FolderDeltaCursor & { known: { uid: number; flags: string }[] }) | null,
+    windowSize?: number,
+  ): Promise<FolderDelta | null>;
   getMessageAttachments(id: string): Promise<
     {
       filename: string;

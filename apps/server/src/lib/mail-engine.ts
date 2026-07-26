@@ -17,6 +17,11 @@ import {
   getFolderSyncRow,
   upsertFolderSyncState,
   listThreadIdsByLabel,
+  getFolderLedger,
+  replaceFolderLedger,
+  applyFolderLedgerDelta,
+  clearFolderLedger,
+  clearFolderSyncData,
   type IndexLabel,
 } from './mail-index';
 import { generateWhatUserCaresAbout, type UserTopic } from './analyze/interests';
@@ -566,6 +571,10 @@ export class MailEngine {
           .delete(threadBlobKey(this.connectionId, threadId))
           .catch(() => undefined);
       }
+      // A validity change invalidates the ladder's cursors AND ledger —
+      // resuming QRESYNC/CONDSTORE state against a new validity is exactly
+      // the corruption this guard exists to prevent.
+      await clearFolderLedger(this.connectionId, folder);
       // Persist the new validity and wipe cached cursors BEFORE syncing so
       // a mid-sync retry doesn't re-trip the guard (and re-purge).
       await upsertFolderSyncState(this.connectionId, folder, {
@@ -579,6 +588,96 @@ export class MailEngine {
         `[MailEngine:${this.connectionId}] purged ${staleThreadIds.length} ${folderLabel} thread(s) after UIDVALIDITY change`,
       );
     }
+    // ------------------------------------------------------------------
+    // Incremental ladder (Phase 6.2, MIGRATION-PLAN §9.1): when a cursor
+    // from a prior completed sync exists (and the guard didn't just wipe
+    // it), sync only what changed — condstore rung or uid-diff floor,
+    // chosen by the driver from server capabilities. Correctness bar: the
+    // result must be indistinguishable from a from-scratch full resync
+    // (the incremental-equivalence E2E oracle), including deletions.
+    // ------------------------------------------------------------------
+    const canIncremental =
+      !guardTripped &&
+      typeof this.driver.fetchFolderDelta === 'function' &&
+      stored?.uidValidity != null &&
+      stored?.uidNext != null &&
+      folderState?.uidValidity != null &&
+      stored.pageToken == null; // a mid-full-sync checkpoint finishes as full
+
+    if (canIncremental) {
+      const started = Date.now();
+      const ledger = await getFolderLedger(this.connectionId, folder);
+      // Bounded flags sweep: the newest window of known UIDs only.
+      const known = ledger
+        .slice()
+        .sort((a, b) => b.uid - a.uid)
+        .slice(0, maxTotal)
+        .map(({ uid, flags }) => ({ uid, flags }));
+      // Non-null: canIncremental established both fields above.
+      const delta = await this.driver.fetchFolderDelta!(folder, {
+        uidValidity: stored!.uidValidity!,
+        uidNext: stored!.uidNext!,
+        highestModseq: stored?.highestModseq ?? null,
+        known,
+      });
+
+      if (delta && !delta.fullResyncRequired) {
+        const ledgerByUid = new Map(ledger.map((e) => [e.uid, e]));
+        const vanishedThreadIds = new Set(
+          delta.vanishedUids
+            .map((uid) => ledgerByUid.get(uid)?.threadId)
+            .filter((id): id is string => !!id),
+        );
+        const changedThreadIds = new Set(delta.messages.map((m) => m.threadId));
+        const affected = [...new Set([...changedThreadIds, ...vanishedThreadIds])];
+
+        let synced = 0;
+        let removed = 0;
+        const concurrency = 3;
+        for (let i = 0; i < affected.length; i += concurrency) {
+          const batch = affected.slice(i, i + concurrency);
+          const results = await Promise.all(
+            batch.map((threadId) =>
+              this.resyncOrRemoveThread(threadId, folderLabel, {
+                stillInFolder: changedThreadIds.has(threadId),
+              }),
+            ),
+          );
+          synced += results.filter((r) => r.success && !r.removed).length;
+          removed += results.filter((r) => r.removed).length;
+          const failed = results.filter((r) => !r.success);
+          if (failed.length) {
+            throw new Error(
+              `syncFolderJob(${folder}) incremental: ${failed.length}/${batch.length} thread syncs failed — first: ${failed[0]?.reason ?? 'unknown'}`,
+            );
+          }
+        }
+
+        await applyFolderLedgerDelta(this.connectionId, folder, {
+          vanishedUids: delta.vanishedUids,
+          messages: delta.messages,
+        });
+        await upsertFolderSyncState(this.connectionId, folder, {
+          uidValidity: delta.newCursor.uidValidity,
+          uidNext: delta.newCursor.uidNext,
+          highestModseq: delta.newCursor.highestModseq,
+          pageToken: null,
+          lastSyncedAt: new Date(),
+          resyncCount: 0,
+          syncMode: delta.mode,
+        });
+        await this.reloadFolder(folder);
+        console.log(
+          `[MailEngine:${this.connectionId}] syncFolderJob(${folder}) [${delta.mode}]: ` +
+            `${synced} synced, ${removed} removed, ${delta.vanishedUids.length} vanished uid(s) in ${Date.now() - started}ms`,
+        );
+        return { synced, total: affected.length, pages: 0 };
+      }
+      console.warn(
+        `[MailEngine:${this.connectionId}] syncFolderJob(${folder}): incremental unavailable (${delta ? 'validity mismatch' : 'no delta'}) — falling back to full`,
+      );
+    }
+
     // Resume only applies to a RETRY of the same job. A fresh job honoring a
     // stale checkpoint (left by a job that exhausted its retries or died
     // with the process) would start mid-listing and skip the newest page —
@@ -631,17 +730,28 @@ export class MailEngine {
 
       const next = listing.nextPageToken ?? null;
       if (!next || Number(next) >= maxTotal) {
-        // Completed run: record the folder state this sync was built
-        // against (the guard's comparison point next time) and clear the
-        // flap counter — a successful sync under a stable validity is the
-        // "not flapping" signal.
+        // Completed full run: rebuild the UID ledger from a window snapshot
+        // (the incremental path's deletion detection depends on it) and
+        // record the cursor this sync was built against. Snapshot failure
+        // degrades to cursor-from-STATUS — the next sync just runs full.
+        const snapshot = await this.driver
+          .fetchFolderDelta?.(folder, null, maxTotal)
+          .catch(() => null);
+        if (snapshot) {
+          await replaceFolderLedger(this.connectionId, folder, snapshot.messages);
+        }
         await upsertFolderSyncState(this.connectionId, folder, {
-          uidValidity: folderState?.uidValidity ?? stored?.uidValidity ?? null,
-          uidNext: folderState?.uidNext ?? null,
-          highestModseq: folderState?.highestModseq ?? null,
+          uidValidity:
+            snapshot?.newCursor.uidValidity ??
+            folderState?.uidValidity ??
+            stored?.uidValidity ??
+            null,
+          uidNext: snapshot?.newCursor.uidNext ?? folderState?.uidNext ?? null,
+          highestModseq: snapshot?.newCursor.highestModseq ?? folderState?.highestModseq ?? null,
           pageToken: null,
           lastSyncedAt: new Date(),
           resyncCount: guardTripped ? resyncCount : 0,
+          syncMode: 'full',
         });
         break;
       }
@@ -654,6 +764,54 @@ export class MailEngine {
       `[MailEngine:${this.connectionId}] syncFolderJob(${folder}): ${synced}/${total} over ${pages} page(s)`,
     );
     return { synced, total, pages };
+  }
+
+  /**
+   * Incremental-path thread refresh (Phase 6.2): re-sync a changed thread,
+   * or REMOVE it when its messages are gone (the deletion case a sync that
+   * only adds can never converge on). A vanished-from-this-folder thread
+   * that survives elsewhere keeps its OTHER folder labels but loses this
+   * one — matching what a from-scratch resync would produce.
+   */
+  private static readonly FOLDER_LABELS = new Set([
+    'INBOX',
+    'SENT',
+    'ARCHIVE',
+    'DRAFT',
+    'DRAFTS',
+    'SPAM',
+    'TRASH',
+    'BIN',
+    'SNOOZED',
+  ]);
+
+  private async resyncOrRemoveThread(
+    threadId: string,
+    folderLabel: string,
+    opts: { stillInFolder: boolean },
+  ): Promise<{ success: boolean; removed?: boolean; reason?: string }> {
+    let extraLabelIds: string[];
+    if (opts.stillInFolder) {
+      extraLabelIds = [folderLabel];
+    } else {
+      // Vanished from this folder: preserve the thread's other folder
+      // memberships, drop this one; message tags are re-derived fresh.
+      const existing = await getThreadLabels(this.connectionId, threadId);
+      extraLabelIds = existing
+        .map((l) => l.id)
+        .filter((id) => MailEngine.FOLDER_LABELS.has(id) && id !== folderLabel);
+    }
+    const result = await this.syncThread({ threadId, extraLabelIds });
+    if (result.success) return { success: true };
+    if (result.reason === 'No latest message') {
+      await deleteIndexedThread(this.connectionId, threadId);
+      await getThreadBlobStore()
+        .delete(threadBlobKey(this.connectionId, threadId))
+        .catch(() => undefined);
+      this.broadcast({ type: OutgoingMessageType.Mail_Get, threadId });
+      return { success: true, removed: true };
+    }
+    return { success: false, reason: result.reason };
   }
 
   async syncFolders() {
@@ -674,6 +832,10 @@ export class MailEngine {
   async forceReSync() {
     this.syncInProgress.clear();
     await clearIndex(this.connectionId);
+    // From-scratch means from scratch: ladder cursors and the UID ledger go
+    // with the index, or the next incremental sync would see "no changes"
+    // against an empty index and leave it empty.
+    await clearFolderSyncData(this.connectionId);
     await this.syncFolders();
   }
 

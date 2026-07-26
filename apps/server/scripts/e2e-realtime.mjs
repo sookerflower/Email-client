@@ -326,6 +326,42 @@ let threadIds = [];
 
 await leg('beacon', async () => {
   const list = () => trpcA('mail.listThreads', { query: { folder: 'inbox', maxResults: 10 } });
+
+  // Converge the index BEFORE picking mutation victims: e2e-mail's cleanup
+  // hard-deletes its run's messages server-side (out-of-band /rpc), and the
+  // removal sync can still be in flight when this suite starts — listing
+  // then hands us GHOST threads that the sync correctly removes moments
+  // later, and a later leg mutates a thread that no longer exists (observed
+  // live: chat-hitl binned a just-removed ghost, labels came back empty).
+  // Enqueue a sync and wait for a completion AFTER now, then list.
+  {
+    const t0 = Date.now();
+    const { Queue } = await import('bullmq');
+    const IORedis = (await import('ioredis')).default;
+    const conn = new IORedis(process.env.QUEUE_REDIS_URL ?? 'redis://127.0.0.1:6379', {
+      maxRetriesPerRequest: null,
+    });
+    const queue = new Queue('mail-sync', { connection: conn });
+    await queue.add('sync-folder', { connectionId, folder: 'inbox' });
+    await queue.close();
+    const postgres = (await import('postgres')).default;
+    const sql = postgres(devVars.DATABASE_URL, { max: 1 });
+    try {
+      const deadline = Date.now() + (REAL ? 120_000 : 60_000);
+      for (;;) {
+        const [row] = await sql`
+          SELECT extract(epoch from last_synced_at) * 1000 AS last_ms
+          FROM mail0_folder_sync_state
+          WHERE connection_id = ${connectionId} AND folder = 'inbox'`;
+        if (row?.last_ms && Number(row.last_ms) > t0) break;
+        if (Date.now() > deadline) throw new Error('pre-mutation convergence sync never completed');
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    } finally {
+      await sql.end();
+    }
+  }
+
   threadIds = ((await list())?.threads ?? []).map((t) => t.id);
   if (threadIds.length < 4) {
     // Seed a freshly-wiped mailbox (drop-recover in e2e-mail restarts
@@ -717,6 +753,36 @@ if (REAL) {
     return `${deleted} thread(s) of run ${runId} hard-deleted from the real server`;
   });
 }
+
+await leg('census-ceiling', async () => {
+  // Standing 6.3 assertion (same as e2e-mail.mjs): never more than
+  // imapCeiling concurrent IMAP sockets per account, recorded by the
+  // worker's socket census since boot — asserted, not eyeballed.
+  const res = await fetch(`${SIDECAR}/census`, {
+    headers: { 'x-imap-sidecar-secret': devVars.IMAP_SIDECAR_SECRET },
+  });
+  if (!res.ok) throw new Error(`/census HTTP ${res.status}`);
+  const census = await res.json();
+  const account = REAL
+    ? `${devVars.TEST_IMAP_USER}@${devVars.IMAP_DEFAULT_IMAP_HOST}`
+    : `${mode.email}@127.0.0.1`;
+  if (!census.accounts?.[account])
+    throw new Error(`census has no entry for ${account} — instrumentation not engaged`);
+  const offenders = Object.entries(census.accounts).filter(
+    ([, s]) => s.maxImap > census.imapCeiling,
+  );
+  if (offenders.length)
+    throw new Error(
+      offenders
+        .map(
+          ([acct, s]) =>
+            `${acct}: maxImap=${s.maxImap}>${census.imapCeiling} at ${new Date(s.maxImapAt).toISOString()}`,
+        )
+        .join('; '),
+    );
+  const s = census.accounts[account];
+  return `ceiling held for every account: maxImap=${s.maxImap}<=${census.imapCeiling}`;
+});
 
 console.log(`\n[e2e-rt] mode=${mode.name} — ${failed ? 'FAILED' : 'ALL LEGS GREEN'}`);
 process.exit(failed ? 1 : 0);

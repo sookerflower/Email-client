@@ -41,6 +41,15 @@ const createMemoryLabelStore = (): LabelStore => {
 };
 
 /**
+ * Socket-census hook (Phase 6.3): the worker passes this in to count every
+ * mail-server socket this driver opens. `open` is called when a connection
+ * ATTEMPT starts and returns an idempotent releaser for when it closes.
+ */
+export interface DriverSocketCensus {
+  open(kind: 'imap' | 'smtp'): () => void;
+}
+
+/**
  * MailManager implementation for arbitrary IMAP/SMTP servers.
  *
  * Transport logic (connection handling, folder discovery, append/move/flag
@@ -152,12 +161,13 @@ const slugify = (name: string) =>
 export class ImapSmtpMailManager implements MailManager {
   private readonly imapAuth: ImapSmtpAuthConfig;
   private readonly labelStore: LabelStore;
+  private readonly census: DriverSocketCensus | undefined;
   private client: ImapFlow | undefined;
   private folderCache: Partial<Record<FolderKind, string | undefined>> = {};
 
   constructor(
     public config: ManagerConfig,
-    opts: { labelStore?: LabelStore } = {},
+    opts: { labelStore?: LabelStore; census?: DriverSocketCensus } = {},
   ) {
     if (!config.auth?.imap) {
       throw new Error(
@@ -169,6 +179,7 @@ export class ImapSmtpMailManager implements MailManager {
     }
     this.imapAuth = config.auth.imap;
     this.labelStore = opts.labelStore ?? createMemoryLabelStore();
+    this.census = opts.census;
   }
 
   // ------------------------------------------------------------------
@@ -177,6 +188,10 @@ export class ImapSmtpMailManager implements MailManager {
 
   private async connect(): Promise<ImapFlow> {
     if (this.client?.usable) return this.client;
+    // Census: counted from attempt start (fail2ban counts failed attempts
+    // too); released on socket close or connect failure (releaser is
+    // idempotent, both may fire).
+    const release = this.census?.open('imap');
     this.client = new ImapFlow({
       host: this.imapAuth.imapHost,
       port: this.imapAuth.imapPort,
@@ -185,10 +200,16 @@ export class ImapSmtpMailManager implements MailManager {
       logger: false,
       tls: this.imapAuth.allowInsecureTls ? { rejectUnauthorized: false } : undefined,
     });
+    if (release) this.client.on('close', release);
     this.client.on('error', (err) => {
       console.error('[ImapSmtpMailManager] imap connection error:', (err as Error)?.message);
     });
-    await this.client.connect();
+    try {
+      await this.client.connect();
+    } catch (error) {
+      release?.();
+      throw error;
+    }
     return this.client;
   }
 
@@ -205,6 +226,7 @@ export class ImapSmtpMailManager implements MailManager {
     } catch (error) {
       return { connected: false, reason: `IMAP: ${(error as Error).message}` };
     }
+    const release = this.census?.open('smtp');
     try {
       const transporter = nodemailer.createTransport({
         host: this.imapAuth.smtpHost,
@@ -216,6 +238,8 @@ export class ImapSmtpMailManager implements MailManager {
       await transporter.verify();
     } catch (error) {
       return { connected: false, reason: `SMTP: ${(error as Error).message}` };
+    } finally {
+      release?.();
     }
     return { connected: true };
   }
@@ -837,14 +861,19 @@ export class ImapSmtpMailManager implements MailManager {
   }
 
   private async smtpSend(from: string, recipients: string[], raw: string): Promise<void> {
-    const transporter = nodemailer.createTransport({
-      host: this.imapAuth.smtpHost,
-      port: this.imapAuth.smtpPort,
-      secure: this.imapAuth.smtpSecure,
-      auth: { user: this.imapAuth.username, pass: this.imapAuth.password },
-      tls: this.imapAuth.allowInsecureTls ? { rejectUnauthorized: false } : undefined,
-    });
-    await transporter.sendMail({ envelope: { from, to: recipients }, raw });
+    const release = this.census?.open('smtp');
+    try {
+      const transporter = nodemailer.createTransport({
+        host: this.imapAuth.smtpHost,
+        port: this.imapAuth.smtpPort,
+        secure: this.imapAuth.smtpSecure,
+        auth: { user: this.imapAuth.username, pass: this.imapAuth.password },
+        tls: this.imapAuth.allowInsecureTls ? { rejectUnauthorized: false } : undefined,
+      });
+      await transporter.sendMail({ envelope: { from, to: recipients }, raw });
+    } finally {
+      release?.();
+    }
   }
 
   private async appendToSent(raw: string): Promise<void> {

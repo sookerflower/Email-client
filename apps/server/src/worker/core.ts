@@ -13,10 +13,12 @@
  * (3.2.3), so losing leadership stops watchers and gaining it starts them.
  */
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
+import { createHash } from 'node:crypto';
 import { ImapFlow } from 'imapflow';
 
 import { createPgLabelStore, migrateJsonLabelStore } from '../lib/imap-label-store';
 import { ImapSmtpMailManager, type LabelStore } from '../lib/driver/imap';
+import { createSocketCensus } from './socket-census';
 import { decryptPassword } from '../lib/driver/imap-crypto';
 import type { ManagerConfig } from '../lib/driver/types';
 import { connection as connectionSchema } from '../db/schema';
@@ -96,35 +98,58 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
   // --- Driver cache: reuse IMAP connections per mailbox ----------------------
   const cache = new Map<string, CacheEntry>();
 
-  // Key includes a digest of the credential so a password change (or a retry
-  // after a typo) never reuses a driver built with stale credentials.
-  const cacheKey = (imap: NonNullable<ManagerConfig['auth']['imap']>) => {
-    const cred = imap.passwordEncrypted ?? imap.password ?? '';
-    let digest = 0;
-    for (let i = 0; i < cred.length; i++) digest = (digest * 31 + cred.charCodeAt(i)) | 0;
-    return `${imap.username}@${imap.imapHost}:${imap.imapPort}#${digest}`;
-  };
+  // Socket census (Phase 6.3): every mail-server socket the worker holds,
+  // per account, with a running max-concurrent-IMAP the E2E suites assert on.
+  const census = createSocketCensus();
+  const accountKey = (imap: NonNullable<ManagerConfig['auth']['imap']>) =>
+    `${imap.username}@${imap.imapHost}`;
+
+  // Key includes a digest of the DECRYPTED password so a real password
+  // change (or a retry after a typo) never reuses a driver built with stale
+  // credentials — while re-encryption of the SAME password (every
+  // Custom-IMAP login re-encrypts with a fresh IV) maps to the same key.
+  // Digesting the ciphertext here caused login churn: each login orphaned
+  // the cached driver (an open IMAP socket, up to 5 min) and restarted the
+  // IDLE watcher for nothing (Phase 6.3).
+  const accountPrefix = (imap: NonNullable<ManagerConfig['auth']['imap']>) =>
+    `${imap.username}@${imap.imapHost}:${imap.imapPort}#`;
+  const cacheKey = (imap: NonNullable<ManagerConfig['auth']['imap']>, password: string) =>
+    `${accountPrefix(imap)}${createHash('sha256').update(password).digest('base64url').slice(0, 16)}`;
+
+  // In-flight disposals by cache key: a rebuild for the same account must
+  // await the old socket's teardown before connecting (never two concurrent
+  // driver connections for one account — the 3.2 invariant, now enforced on
+  // the idle-timer eviction path too, not just the reconnect retry).
+  const disposing = new Map<string, Promise<void>>();
 
   const evict = (key: string): Promise<void> => {
     const entry = cache.get(key);
-    if (!entry) return Promise.resolve();
+    if (!entry) return disposing.get(key) ?? Promise.resolve();
     cache.delete(key);
     clearTimeout(entry.timer);
-    // Returned (not just fired) so the reconnect path can await the old
-    // socket's teardown before opening a replacement — never two concurrent
-    // driver connections for one account (3.2 invariant).
-    return entry.driver.dispose().catch(() => undefined);
+    const teardown = entry.driver
+      .dispose()
+      .catch(() => undefined)
+      .then(() => {
+        if (disposing.get(key) === teardown) disposing.delete(key);
+      });
+    disposing.set(key, teardown);
+    return teardown;
   };
 
-  // Per-driver operation serialization (Phase 6.2). Every /rpc call is one
-  // complete driver method, but different callers (worker jobs, api tRPC,
-  // E2E polling) share ONE cached IMAP connection — and a concurrent op
-  // that opens a different mailbox between another op's commands makes
-  // multi-fetch sequences read the WRONG mailbox (observed live: a folder
-  // delta's uid scan returned another folder's uids, producing false
-  // "vanished" messages and wrongful thread removals). Serializing whole
-  // methods per driver makes each sequence atomic w.r.t. selection; the
-  // single connection was serializing raw commands anyway.
+  // Per-ACCOUNT operation serialization (Phase 6.2, widened in 6.3). Every
+  // /rpc call is one complete driver method, but different callers (worker
+  // jobs, api tRPC, E2E polling) share ONE cached IMAP connection — and a
+  // concurrent op that opens a different mailbox between another op's
+  // commands makes multi-fetch sequences read the WRONG mailbox (observed
+  // live: a folder delta's uid scan returned another folder's uids,
+  // producing false "vanished" messages and wrongful thread removals).
+  // Serializing whole methods makes each sequence atomic w.r.t. selection.
+  // 6.3 keys the chain on the ACCOUNT (not the credential-digested cache
+  // key) and runs driverFor INSIDE it, so cache rebuilds and same-account
+  // evictions also serialize against in-flight ops — a credential change
+  // can never tear a socket out from under a running method and let old
+  // and new drivers hold two connections at once.
   const opChains = new Map<string, Promise<unknown>>();
   const withDriverLock = <T>(key: string, fn: () => Promise<T>): Promise<T> => {
     const prev = opChains.get(key) ?? Promise.resolve();
@@ -148,7 +173,9 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
       `${error.code ?? ''} ${error.message ?? ''}`,
     );
 
-  async function driverFor(auth: ManagerConfig['auth']): Promise<ImapSmtpMailManager> {
+  async function driverFor(
+    auth: ManagerConfig['auth'],
+  ): Promise<{ driver: ImapSmtpMailManager; key: string }> {
     const imap = auth.imap;
     if (!imap) throw new Error('auth.imap missing');
 
@@ -164,21 +191,39 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
     // watchersEnabled so a non-leader worker serves /rpc without IDLE sockets.
     if (auth.connectionId && opts.watchersEnabled()) ensureWatcher(auth, password);
 
-    const key = cacheKey(imap);
+    const key = cacheKey(imap, password);
     const existing = cache.get(key);
     if (existing) {
       clearTimeout(existing.timer);
-      existing.timer = setTimeout(() => evict(key), IDLE_MS);
-      return existing.driver;
+      existing.timer = setTimeout(() => void evict(key), IDLE_MS);
+      return { driver: existing.driver, key };
     }
+
+    // A REAL credential change strands the old entry under its old digest
+    // with an open IMAP socket — evict any same-account siblings, and await
+    // every pending same-account teardown, before connecting a replacement
+    // (the ≤2-IMAP-sockets-per-account ceiling has no allowance for a
+    // "briefly both" window).
+    const prefix = accountPrefix(imap);
+    const teardowns: Promise<void>[] = [];
+    for (const staleKey of Array.from(cache.keys())) {
+      if (staleKey.startsWith(prefix) && staleKey !== key) teardowns.push(evict(staleKey));
+    }
+    for (const [pendingKey, pending] of disposing) {
+      if (pendingKey.startsWith(prefix)) teardowns.push(pending);
+    }
+    if (teardowns.length) await Promise.all(teardowns);
 
     const driver = new ImapSmtpMailManager(
       { auth: { ...auth, imap: { ...imap, password } } },
-      { labelStore },
+      {
+        labelStore,
+        census: { open: (kind) => census.open(accountKey(imap), kind === 'imap' ? 'driver' : 'smtp') },
+      },
     );
-    const timer = setTimeout(() => evict(key), IDLE_MS);
+    const timer = setTimeout(() => void evict(key), IDLE_MS);
     cache.set(key, { driver, timer });
-    return driver;
+    return { driver, key };
   }
 
   // --- New-mail watchers (IMAP IDLE + poll fallback) -------------------------
@@ -218,9 +263,13 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
     watcher.notifyTimer = setTimeout(() => void notify(watcher.connectionId), NOTIFY_DEBOUNCE_MS);
   }
 
-  async function runWatcher(watcher: Watcher): Promise<void> {
+  async function runWatcher(watcher: Watcher, predecessorDown: Promise<void>): Promise<void> {
     const { imap, password } = watcher;
+    // Never overlap the replaced watcher's socket: wait for its logout (or
+    // a bounded grace) before the first connection attempt.
+    await Promise.race([predecessorDown, new Promise((r) => setTimeout(r, 5000))]);
     while (!watcher.stopped) {
+      const release = census.open(accountKey(imap), 'watcher');
       try {
         const client = new ImapFlow({
           host: imap.imapHost,
@@ -230,6 +279,7 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
           logger: false,
           tls: imap.allowInsecureTls ? { rejectUnauthorized: false } : undefined,
         });
+        client.on('close', release);
         watcher.client = client;
         client.on('exists', () => scheduleNotify(watcher));
         client.on('expunge', () => scheduleNotify(watcher));
@@ -252,18 +302,22 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
           (error as Error).message,
         );
       }
+      release();
       watcher.client = null;
       if (watcher.stopped) break;
       await new Promise((resolve) => setTimeout(resolve, RECONNECT_DELAY_MS));
     }
   }
 
-  function stopWatcher(watcher: Watcher): void {
+  /** Returns when the watcher's socket is down (logout done or no socket). */
+  function stopWatcher(watcher: Watcher): Promise<void> {
     watcher.stopped = true;
     if (watcher.notifyTimer) clearTimeout(watcher.notifyTimer);
     if (watcher.pollTimer) clearInterval(watcher.pollTimer);
-    void watcher.client?.logout().catch(() => undefined);
     watchers.delete(watcher.connectionId);
+    const client = watcher.client;
+    watcher.client = null;
+    return client ? client.logout().catch(() => undefined) : Promise.resolve();
   }
 
   function ensureWatcher(auth: ManagerConfig['auth'], password: string): void {
@@ -271,10 +325,14 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
     const connectionId = auth.connectionId;
     if (!imap || !connectionId) return;
 
-    const credDigest = cacheKey(imap);
+    // Digest of the PLAINTEXT credential (6.3): re-encryption of the same
+    // password on every Custom-IMAP login used to churn this digest and
+    // needlessly restart the IDLE watcher on each login.
+    const credDigest = cacheKey(imap, password);
     const existing = watchers.get(connectionId);
     if (existing && existing.credDigest === credDigest) return; // already watching
-    if (existing) stopWatcher(existing); // credentials/host changed — restart
+    // Credentials/host actually changed — restart, awaiting the old socket.
+    const predecessorDown = existing ? stopWatcher(existing) : Promise.resolve();
 
     const watcher: Watcher = {
       connectionId,
@@ -291,13 +349,13 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
       watcher.pollTimer = setInterval(() => void notify(connectionId), opts.pollSeconds * 1000);
     }
 
-    void runWatcher(watcher);
+    void runWatcher(watcher, predecessorDown);
   }
 
   function stopAllWatchers(reason: string): void {
     if (!watchers.size) return;
     console.log(`[mail-worker] stopping ${watchers.size} watcher(s): ${reason}`);
-    for (const watcher of Array.from(watchers.values())) stopWatcher(watcher);
+    for (const watcher of Array.from(watchers.values())) void stopWatcher(watcher);
   }
 
   /**
@@ -396,6 +454,15 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
       });
     }
 
+    // Socket census (6.3): secret-guarded (accounts are usernames@hosts).
+    // The E2E suites assert the per-account max-concurrent-IMAP ceiling here.
+    if (req.method === 'GET' && url.pathname === '/census') {
+      if (req.headers['x-imap-sidecar-secret'] !== opts.secret) {
+        return send(res, 401, { error: 'Unauthorized' });
+      }
+      return send(res, 200, census.snapshot());
+    }
+
     const isQueueRoute =
       url.pathname === '/enqueue-send' || url.pathname === '/cancel-send';
     if (req.method !== 'POST' || (url.pathname !== '/rpc' && !isQueueRoute)) {
@@ -453,16 +520,21 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
       return send(res, 400, { error: 'Invalid JSON body' });
     }
 
-    const runMethod = async () => {
-      const driver = await driverFor(auth);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const fn = (driver as any)[method];
-      if (typeof fn !== 'function') {
-        throw Object.assign(new Error(`Unknown method: ${method}`), { code: 'EUNKNOWN_METHOD' });
-      }
-      const lockKey = auth.imap ? cacheKey(auth.imap) : method;
-      return await withDriverLock(lockKey, () => fn.apply(driver, args));
-    };
+    // The account lock wraps driverFor too (not just the method), so cache
+    // rebuilds/evictions serialize against in-flight ops for the account.
+    const lockKey = auth.imap ? accountPrefix(auth.imap) : method;
+    let usedKey: string | null = null;
+    const runMethod = () =>
+      withDriverLock(lockKey, async () => {
+        const { driver, key } = await driverFor(auth);
+        usedKey = key;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const fn = (driver as any)[method];
+        if (typeof fn !== 'function') {
+          throw Object.assign(new Error(`Unknown method: ${method}`), { code: 'EUNKNOWN_METHOD' });
+        }
+        return await fn.apply(driver, args);
+      });
 
     try {
       const result = await runMethod();
@@ -476,11 +548,11 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
       // connection reports `usable` until a command actually fails, so the
       // failure IS the detection. Evict (awaiting the old socket's
       // teardown), rebuild the driver, retry the op exactly once.
-      if (auth.imap && isConnectionError(e)) {
+      if (auth.imap && usedKey && isConnectionError(e)) {
         console.warn(
           `[mail-worker] ${method} failed on cached connection (${e.message}) — evicting driver, one-shot reconnect retry`,
         );
-        await evict(cacheKey(auth.imap));
+        await evict(usedKey);
         // Brief settle: post-drop the server side may need a moment (e.g.
         // it just restarted); an instant retry can hit the same wall.
         await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -510,7 +582,7 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
     close: async () => {
       clearInterval(reconcileTimer);
       stopAllWatchers('worker shutting down');
-      for (const key of Array.from(cache.keys())) evict(key);
+      for (const key of Array.from(cache.keys())) void evict(key);
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };

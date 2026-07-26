@@ -403,16 +403,35 @@ const rawImap = async () => {
   return client;
 };
 
-const enqueueInboxSync = async (connectionId) => {
+const enqueueInboxSync = async (connectionId, folder = 'inbox') => {
   const { Queue } = await import('bullmq');
   const IORedis = (await import('ioredis')).default;
   const conn = new IORedis(process.env.QUEUE_REDIS_URL ?? 'redis://127.0.0.1:6379', {
     maxRetriesPerRequest: null,
   });
   const queue = new Queue('mail-sync', { connection: conn });
-  await queue.add('sync-folder', { connectionId, folder: 'inbox' });
+  await queue.add('sync-folder', { connectionId, folder });
   await queue.close();
 };
+
+// --------------------------------------------------------------------------
+// Phase 6.3 — socket-census helpers. The worker counts every mail-server
+// socket it holds per account; these legs ASSERT the fail2ban invariant
+// (never more than imapCeiling concurrent IMAP sockets per account) instead
+// of eyeballing worker logs.
+// --------------------------------------------------------------------------
+
+const fetchCensus = async () => {
+  const res = await fetch(`${SIDECAR}/census`, {
+    headers: { 'x-imap-sidecar-secret': devVars.IMAP_SIDECAR_SECRET },
+  });
+  if (!res.ok) throw new Error(`/census HTTP ${res.status}`);
+  return res.json();
+};
+
+const censusAccount = REAL
+  ? `${devVars.TEST_IMAP_USER}@${devVars.IMAP_DEFAULT_IMAP_HOST}`
+  : `${mode.email}@127.0.0.1`;
 
 /**
  * Canonical app snapshot: sorted "subject|labels" lines for inbox threads.
@@ -429,6 +448,13 @@ const appSnapshot = async (filterRunId) => {
     const thread = await trpc('mail.get', { query: { id: t.id } });
     const subject = thread?.latest?.subject ?? '';
     if (filterRunId && !subject.includes(runId)) continue;
+    // The scheduled-send messages are timer-delayed BY DESIGN (delayed job
+    // + outbox-reconcile sweep as delivery safety net), so their arrival
+    // time is nondeterministic — one landing between snapshot A and
+    // snapshot B diverges the oracle without any incremental defect
+    // (observed live on --real). They are not controlled mutations; the
+    // greenmail scheduled-send leg asserts their arrival explicitly.
+    if (filterRunId && /^e2e (scheduled|cancelled) /.test(subject)) continue;
     const labels = (thread?.labels ?? [])
       .map((l) => l.id)
       .filter((id) => id === 'INBOX' || id === 'UNREAD' || id === 'STARRED' || id.startsWith('$'))
@@ -562,6 +588,137 @@ await leg('ladder-mode', async () => {
     );
   }
   return `rung "${equivalenceModeSeen}" matches ${mode.name} capabilities`;
+});
+
+await leg('census-discipline', async () => {
+  // Phase 6.3: the three serialization mechanisms — 3.2's leader-lease
+  // single-watcher invariant, 4.2's per-account job serialization, and the
+  // (6.2, widened in 6.3) per-account driver-method lock — must COMPOSE
+  // under concurrent load: no seam where two driver connections open, and
+  // no over-serialization stall. This is the concurrent shape that
+  // reproduced the 6.2 SELECT-interleave bug (mixed-folder /rpc callers +
+  // sync jobs + api traffic), now run with the census watching.
+  const result = await trpc('connections.list', { query: null });
+  const all = result?.connections ?? [];
+  const connectionId = (all.find((c) => c.email === mode.email) ?? all[0])?.id;
+  if (!connectionId) throw new Error('no connection id');
+
+  const auth = {
+    userId: 'e2e-census',
+    accessToken: '',
+    refreshToken: '',
+    email: mode.email,
+    imap: REAL
+      ? {
+          imapHost: devVars.IMAP_DEFAULT_IMAP_HOST,
+          imapPort: Number(devVars.IMAP_DEFAULT_IMAP_PORT || 993),
+          imapSecure: true,
+          smtpHost: devVars.IMAP_DEFAULT_SMTP_HOST,
+          smtpPort: Number(devVars.IMAP_DEFAULT_SMTP_PORT || 587),
+          smtpSecure: false,
+          username: devVars.TEST_IMAP_USER,
+          password: devVars.TEST_IMAP_PASSWORD,
+          allowInsecureTls: true,
+        }
+      : {
+          imapHost: '127.0.0.1',
+          imapPort: 3143,
+          imapSecure: false,
+          smtpHost: '127.0.0.1',
+          smtpPort: 3025,
+          smtpSecure: false,
+          username: mode.email,
+          password: mode.password,
+        },
+  };
+  const rpc = async (method, args) => {
+    const res = await fetch(`${SIDECAR}/rpc`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-imap-sidecar-secret': devVars.IMAP_SIDECAR_SECRET,
+      },
+      body: JSON.stringify({ method, args, auth }),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(`${method}: ${body.error}`);
+    return body.result;
+  };
+
+  const boundMs = REAL ? 120_000 : 60_000;
+  const started = Date.now();
+  // Mixed-folder /rpc + queued sync jobs + api tRPC, all at once. A stall
+  // (over-serialization deadlock) fails the race; a seam (two concurrent
+  // driver sockets) fails the ceiling check below.
+  const ops = Promise.all([
+    rpc('list', [{ folder: 'inbox', maxResults: 10 }]),
+    rpc('list', [{ folder: 'sent', maxResults: 10 }]),
+    rpc('getFolderState', ['inbox']),
+    rpc('getFolderState', ['sent']),
+    rpc('count', []),
+    rpc('list', [{ folder: 'inbox', maxResults: 5 }]),
+    enqueueInboxSync(connectionId, 'inbox'),
+    enqueueInboxSync(connectionId, 'sent'),
+    listInbox(),
+    trpc('mail.listThreads', { query: { folder: 'sent', maxResults: 10 } }),
+  ]);
+  const results = await Promise.race([
+    ops,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`concurrent ops stalled >${boundMs / 1000}s`)), boundMs),
+    ),
+  ]);
+  const inboxListing = results[0];
+  if (!Array.isArray(inboxListing?.threads))
+    throw new Error('concurrent inbox list returned no thread array');
+
+  const census = await fetchCensus();
+  const acct = census.accounts?.[censusAccount];
+  if (!acct) throw new Error(`census has no entry for ${censusAccount} — instrumentation not engaged`);
+  if (acct.maxImap > census.imapCeiling)
+    throw new Error(`ceiling breached under load: maxImap=${acct.maxImap} > ${census.imapCeiling}`);
+  return `10 concurrent ops in ${Date.now() - started}ms, maxImap=${acct.maxImap}<=${census.imapCeiling}`;
+});
+
+await leg('census-login-churn', async () => {
+  // Phase 6.3 known fix: every Custom-IMAP login re-encrypts the password
+  // (fresh IV -> new ciphertext). The digests are now computed from the
+  // DECRYPTED password, so repeated logins must NOT cycle the IDLE watcher
+  // or the cached driver connection.
+  const before = await fetchCensus();
+  const acctBefore = before.accounts?.[censusAccount];
+  if (!acctBefore) throw new Error(`census has no entry for ${censusAccount}`);
+
+  for (let i = 1; i <= 2; i++) {
+    const res = await fetch(`${APP}/api/auth/sign-in/imap`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: ORIGIN },
+      body: JSON.stringify(mode.loginBody(mode.email, mode.password)),
+    });
+    if (!res.ok) throw new Error(`re-login ${i} failed (HTTP ${res.status})`);
+  }
+  // An authenticated driver op now carries the NEW ciphertext plus the
+  // connectionId — pre-fix this is exactly what restarted the watcher.
+  await listInbox();
+  // A watcher restart reconnects immediately (not after the 60s retry
+  // delay), so this window is ample for the churn to show if it exists.
+  await new Promise((r) => setTimeout(r, 8000));
+
+  const after = await fetchCensus();
+  const acctAfter = after.accounts?.[censusAccount];
+  const watcherDelta = acctAfter.opens.watcher - acctBefore.opens.watcher;
+  if (watcherDelta !== 0)
+    throw new Error(`IDLE watcher cycled ${watcherDelta}x across re-logins — credDigest not stable`);
+  const driverDelta = acctAfter.opens.driver - acctBefore.opens.driver;
+  // Strict on GreenMail; on --real a natural post-APPEND drop could add a
+  // legitimate reconnect, so the driver assert would flake there.
+  if (!REAL && driverDelta !== 0)
+    throw new Error(`driver connection cycled ${driverDelta}x across re-logins — cache key not stable`);
+  if (acctAfter.open.driver > 1 || acctAfter.open.watcher > 1)
+    throw new Error(
+      `duplicate sockets after re-logins: driver=${acctAfter.open.driver} watcher=${acctAfter.open.watcher}`,
+    );
+  return `2 re-logins: watcher opens +${watcherDelta}, driver opens +${driverDelta}, open now driver=${acctAfter.open.driver} watcher=${acctAfter.open.watcher}`;
 });
 
 if (REAL) {
@@ -720,9 +877,20 @@ if (!REAL) {
         if (Date.now() > deadline) throw new Error('phase-A message never synced');
         await new Promise((r) => setTimeout(r, 3000));
       }
-      const before = await pgRow(connectionId);
-      if (before?.uid_validity == null)
-        throw new Error('sync did not record uid_validity before the change');
+      // Bounded poll, not a single read: while the inbox index is empty
+      // (exactly the post-drop-recover state), every listThreads poll above
+      // may fire an ASYNC forceReSync (30s cooldown) whose clear->record
+      // window can transiently hide the row a job sync just wrote. The
+      // assertion stands — validity must be recorded — it just tolerates an
+      // in-flight concurrent resync.
+      let before = await pgRow(connectionId);
+      const validityDeadline = Date.now() + 60_000;
+      while (before?.uid_validity == null) {
+        if (Date.now() > validityDeadline)
+          throw new Error('sync did not record uid_validity before the change');
+        await new Promise((r) => setTimeout(r, 3000));
+        before = await pgRow(connectionId);
+      }
 
       // The change: restart (new validity, empty store) and reseed B.
       const { execSync } = await import('node:child_process');
@@ -795,6 +963,31 @@ if (!REAL) {
     }
   });
 }
+
+await leg('census-ceiling', async () => {
+  // The standing 6.3 regression assertion, LAST on purpose: maxImap is the
+  // running maximum since worker boot, so this covers every leg above
+  // (including the GreenMail-restart churn of drop-recover and
+  // uidvalidity-guard) — the fail2ban trigger cannot have recurred if this
+  // holds.
+  const census = await fetchCensus();
+  if (!census.accounts?.[censusAccount])
+    throw new Error(`census has no entry for ${censusAccount} — instrumentation not engaged`);
+  const offenders = Object.entries(census.accounts).filter(
+    ([, s]) => s.maxImap > census.imapCeiling,
+  );
+  if (offenders.length)
+    throw new Error(
+      offenders
+        .map(
+          ([account, s]) =>
+            `${account}: maxImap=${s.maxImap}>${census.imapCeiling} at ${new Date(s.maxImapAt).toISOString()}`,
+        )
+        .join('; '),
+    );
+  const s = census.accounts[censusAccount];
+  return `ceiling held for every account: maxImap=${s.maxImap}<=${census.imapCeiling} (opens: driver=${s.opens.driver} watcher=${s.opens.watcher} smtp=${s.opens.smtp})`;
+});
 
 console.log(`\n[e2e] mode=${mode.name} — ${failed ? 'FAILED' : 'ALL LEGS GREEN'}`);
 process.exit(failed ? 1 : 0);

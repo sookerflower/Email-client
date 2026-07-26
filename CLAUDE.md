@@ -1,6 +1,6 @@
 # Project: Self-hosted email client for a ~20-person classroom deployment
 
-## Current status (as of 2026-07-25) — READ THIS FIRST
+## Current status (as of 2026-07-26) — READ THIS FIRST
 
 **Direction: Path B — de-Cloudflaring THIS repo (`Email-client/`, a Mail Zero
 fork) onto plain Node + Postgres + Redis.** This supersedes the older
@@ -66,13 +66,88 @@ with the incidents and verification numbers. Read it before doing anything.
   Known env constraint: the ws.re.cx LLM proxy BUFFERS SSE — chat arrives
   as one burst; fixing that proxy is outside this repo.
 
-### Next: Phase 6 — hardening/cutover (needs user go before starting)
-UIDVALIDITY guard + CONDSTORE/QRESYNC incremental-sync ladder (the 2–4 min
-full-refetch syncs are the one big UX cost left; E2E `--real` windows are
-240 s because of them), connection-discipline audit against the real
-server, dead-code sweep (remaining empty DO shells ZeroDB/ZeroDriver/
-ShardRegistry + WorkflowRunner/ThreadSyncWorker/workflows and the workerd
-path at cutover), repo hygiene, fresh-mailbox resync drill.
+- **Phase 6 — hardening/cutover, IN PROGRESS.** Order (confirmed with user,
+  correctness before speed): 6.1 UIDVALIDITY guard (done) → 6.2 incremental
+  ladder (done) → 6.3 connection-discipline audit (done) → **6.4 dead-code
+  sweep + workerd deletion (NEXT)** (user-approved: delete it entirely, do not
+  keep a dual-target story) → 6.5 fresh-mailbox resync drill. Each step:
+  report, hold for user go, commit+push on close.
+  - **6.1 (closed)**: `MailManager.getFolderState` (optional; IMAP driver +
+    proxy implement it) + `syncFolderJob` compares server `uidValidity` to
+    `folder_sync_state` before every sync. On change: purge folder-labeled
+    threads + blobs (stale blobs encode the OLD validity+UID — the
+    corruption vector), wipe cached cursors, persist new validity BEFORE
+    syncing, full resync. Flap cap: `resync_count` column (migration 0042),
+    ≥3 consecutive validity resyncs fail loudly instead of looping, ages out
+    after 1h quiet. E2E leg `uidvalidity-guard` (GreenMail restart = a real
+    validity change + mailbox swap).
+  - **6.2 (closed)**: `fetchFolderDelta` ladder — `condstore` rung (FETCH
+    CHANGEDSINCE; QRESYNC-advertising servers run this rung too — imapflow
+    has no QRESYNC SELECT/VANISHED, so deletions on BOTH rungs use a uid-only
+    presence scan) and `uid-diff` floor (uidNext delta + bounded flags
+    sweep). New `folder_message` UID→thread ledger (migration 0043, window-
+    bounded — deletion attribution is impossible without it) + `sync_mode`
+    column. Guard trip clears ladder cursors AND ledger; `forceReSync` resets
+    both with the index. **Two real defects the equivalence oracle caught
+    before merge**: (1) `upsertThread` label writes were ADD-ONLY — UNREAD
+    could never clear after a `\Seen` flip on ANY sync path, fixed by
+    replacing tag-derived labels from fresh flags; (2) driver multi-command
+    sequences weren't atomic vs mailbox selection — concurrent `/rpc` callers
+    interleaved SELECTs on the shared connection, corrupting deletion
+    detection — fixed with `withDriverLock` (whole methods serialize per
+    cached driver in `src/worker/core.ts`). E2E: `incremental-equivalence`
+    (the gate — snapshot-identical incremental vs from-scratch resync on
+    BOTH rungs, deletions included) + `ladder-mode` (asserts the rung matches
+    server capabilities). Speed logged not asserted: m.re.cx steady-state
+    0.5–7 s vs 60–280 s full-refetch; `--real` E2E windows tightened
+    240 s→120 s in a separate confirming commit after the equivalence legs
+    were green.
+  - **6.3 (closed)**: per-account socket census in the worker
+    (`src/worker/socket-census.ts`, worker `GET /census`, secret-guarded) —
+    every IMAP/SMTP socket counted per account from connection attempt to
+    close. Design ceiling **2 concurrent IMAP sockets per account** (1
+    cached driver + 1 IDLE watcher), ASSERTED by standing legs in BOTH
+    suites: `census-ceiling` (last leg, max-since-boot ≤ 2 for every
+    account), `census-discipline` (the 6.2 interleave shape — 10 concurrent
+    mixed-folder /rpc + sync jobs + api calls — bounded wall-clock, no
+    stall, ceiling held: 3.2 lease + 4.2 job serialization + method lock
+    compose), `census-login-churn` (2 re-logins → watcher opens +0, driver
+    opens +0). Login churn fixed: cache key + watcher credDigest digest the
+    DECRYPTED password now (ciphertext digests churned the watcher AND
+    orphaned the cached driver's socket on every login). Seams closed: the
+    6.2 method lock widened to per-ACCOUNT with `driverFor` inside it;
+    watcher restarts await predecessor logout; evictions awaited via a
+    disposing map. Fixed in-flight: `forceReSync` now records cursor+ledger
+    at completion (was: wiped sync state and never re-recorded — raced job
+    syncs' cursor writes, forfeited the ladder after every forceSync);
+    incremental vanish no longer deletes TRASH/BIN/SPAM-labeled threads
+    (driver member-folder search can't see trash — an index-side-binned
+    thread would silently leave the Bin view); e2e-realtime now converges
+    the index (sync + wait) before picking mutation victims — e2e-mail's
+    out-of-band cleanup deletions left ghost threads a leg then mutated.
+    Real-run census: driver opens=1, watcher opens=1 over a full --real
+    e2e-mail run.
+  - **6.4 (planned)**: delete the workerd/Cloudflare path entirely —
+    wrangler.jsonc + wrangler dep + worker-configuration.d.ts, remaining DO
+    shells (ZeroDB/ZeroDriver/ShardRegistry/WorkflowRunner/ThreadSyncWorker),
+    dead CF workflow classes, the workerd `Entry` class, the cf-shim
+    indirection; retire `wrangler --dry-run` from the verification standard
+    (replaced by Node build+boot+both suites, which has been the real
+    standard since Phase 0). **Hard constraint, verify immediately after
+    deletion, not just at phase end: both logins (Google OAuth + Custom
+    IMAP/SMTP) must survive intact** — Google OAuth is runtime-agnostic and
+    was never meant to go; a workerd sweep is exactly where it could get
+    caught by accident. Expect tsc floor to drop; re-baseline when it lands.
+  - **6.5 (planned)**: fresh-mailbox resync drill — wipe Postgres index/blobs,
+    boot worker+api from nothing, full resync from m.re.cx, both suites
+    green, timings recorded. Live proof of "no data migration needed."
+  - **Cutover-readiness realities carried forward, NOT Phase 6 code tasks**:
+    the ws.re.cx LLM proxy buffers SSE (chat arrives as one burst regardless
+    of our streaming — proven ours delivers progressively; fix is proxy
+    config, outside this repo); qwen2.5:32b is unreliable at multi-step tool
+    chains (sometimes narrates a tool call as text instead of making it —
+    model-choice issue, not a repo bug). Both belong on an ops checklist, not
+    in code.
 
 ## How to run / verify (Windows, Node 22)
 - Build both bundles: `node src/node/build.mjs` (from `apps/server`).

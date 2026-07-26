@@ -804,6 +804,25 @@ export class MailEngine {
     const result = await this.syncThread({ threadId, extraLabelIds });
     if (result.success) return { success: true };
     if (result.reason === 'No latest message') {
+      // "No latest message" means the driver found nothing in its MEMBER
+      // folders (inbox/sent/archive/drafts) — but trash and junk are
+      // deliberately outside that search, so for a binned/spammed thread it
+      // does NOT mean gone. Deleting the row here emptied the Bin view the
+      // moment an incremental sync followed a BulkDelete (the app-side
+      // TRASH move makes the UID vanish from inbox, this path fired, and
+      // the thread disappeared from the index entirely — observed live via
+      // the chat-hitl leg). Keep the row and its blob; drop only this
+      // folder's label, exactly the vanished-but-alive-elsewhere semantics.
+      if (!opts.stillInFolder) {
+        const outOfSearch = extraLabelIds.filter(
+          (id) => id === 'TRASH' || id === 'BIN' || id === 'SPAM',
+        );
+        if (outOfSearch.length) {
+          await this.modifyThreadLabelsInDB(threadId, [], [folderLabel]);
+          this.broadcast({ type: OutgoingMessageType.Mail_Get, threadId });
+          return { success: true };
+        }
+      }
       await deleteIndexedThread(this.connectionId, threadId);
       await getThreadBlobStore()
         .delete(threadBlobKey(this.connectionId, threadId))
@@ -837,6 +856,40 @@ export class MailEngine {
     // against an empty index and leave it empty.
     await clearFolderSyncData(this.connectionId);
     await this.syncFolders();
+    // Record the cursor this resync was built against (Phase 6.3). Leaving
+    // folder_sync_state empty until the next JOB sync both forfeits the 6.2
+    // ladder right after every forceSync AND races concurrent job syncs'
+    // cursor writes — observed live: listThreads' empty-inbox async
+    // forceReSync deleted the validity row a watcher-triggered job sync had
+    // just recorded, so a read in between saw no cursor at all.
+    await this.recordFullSyncCursor('inbox');
+  }
+
+  /**
+   * Persist the cursor + UID ledger for a folder that a full sync pass just
+   * covered — the same completion bookkeeping syncFolderJob does, for the
+   * api-process full-resync path. Snapshot failure degrades to
+   * cursor-from-STATUS; the next sync just runs full.
+   */
+  private async recordFullSyncCursor(folder: string): Promise<void> {
+    const snapshot = await this.driver
+      .fetchFolderDelta?.(folder, null, maxSyncCount())
+      .catch(() => null);
+    if (snapshot) {
+      await replaceFolderLedger(this.connectionId, folder, snapshot.messages);
+    }
+    const folderState = snapshot
+      ? null
+      : ((await this.driver.getFolderState?.(folder).catch(() => null)) ?? null);
+    await upsertFolderSyncState(this.connectionId, folder, {
+      uidValidity: snapshot?.newCursor.uidValidity ?? folderState?.uidValidity ?? null,
+      uidNext: snapshot?.newCursor.uidNext ?? folderState?.uidNext ?? null,
+      highestModseq: snapshot?.newCursor.highestModseq ?? folderState?.highestModseq ?? null,
+      pageToken: null,
+      lastSyncedAt: new Date(),
+      resyncCount: 0,
+      syncMode: 'full',
+    });
   }
 
   async isSyncing(): Promise<boolean> {

@@ -539,3 +539,27 @@ export const setFolderSyncPageToken = async (
       },
     });
 };
+export async function intersectThreadIdsByLabel(
+  connectionId: string,
+  threadIds: string[],
+  labelIds: string[]
+): Promise<string[]> {
+  if (threadIds.length === 0 || labelIds.length === 0) return threadIds;
+
+  const results = await db()
+    .select({ threadId: threadLabel.threadId })
+    .from(threadLabel)
+    .where(
+      and(
+        eq(threadLabel.connectionId, connectionId),
+        inArray(threadLabel.threadId, threadIds),
+        inArray(threadLabel.labelId, labelIds),
+      ),
+    )
+    .groupBy(threadLabel.threadId)
+    .having(sql`count(distinct ${threadLabel.labelId}) = ${labelIds.length}`);
+
+  return results.map((r) => r.threadId);
+}
+
+

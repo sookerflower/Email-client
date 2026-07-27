@@ -161,6 +161,7 @@ export interface MailManager {
     maxResults?: number;
     labelIds?: string[];
     pageToken?: string | number;
+    intersectFn?: (threadIds: string[], labelIds: string[]) => Promise<string[]>;
   }): Promise<{
     threads: { id: string; historyId: string | null; $raw?: unknown }[];
     nextPageToken: string | null;

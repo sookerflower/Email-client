@@ -122,6 +122,10 @@ export const shouldShowSeparateTime = (dateString: string | undefined): boolean 
  */
 export function formatDate(dateInput: string | Date | number): string {
   if (typeof dateInput === 'number') {
+    // new Date(NaN).toISOString() throws RangeError. This runs during render,
+    // so an unparseable date used to take down the entire route via the root
+    // ErrorBoundary rather than blanking one timestamp.
+    if (!Number.isFinite(dateInput)) return '';
     dateInput = new Date(dateInput).toISOString();
   }
 

@@ -247,10 +247,10 @@ export const GmailSearchAssistantSystemPrompt = () =>
       Multilingual Support: Recognize queries in any language, map foreign terms (e.g. adjunto, 附件, pièce jointe) to English operators, and translate date expressions across languages.
     </Guideline>
     <Guideline id="3">
-      Use Gmail Syntax: Employ operators like <code>from:</code>, <code>to:</code>, <code>cc:</code>, <code>subject:</code>, <code>label:</code>, <code>in:</code>, <code>in:anywhere</code>, <code>has:attachment</code>, <code>filename:</code>, <code>before:</code>, <code>after:</code>, <code>older_than:</code>, <code>newer_than:</code>, and <code>intext:</code>. Combine fields with implicit AND and group alternatives with <code>OR</code> in parentheses or braces.
+      Use Gmail Syntax: Employ operators like <code>from:</code>, <code>to:</code>, <code>cc:</code>, <code>subject:</code>, <code>label:</code>, <code>in:</code>, <code>in:anywhere</code>, <code>has:attachment</code>, <code>before:</code>, <code>after:</code>, <code>older_than:</code>, <code>newer_than:</code>, and <code>intext:</code>. Combine fields with implicit AND and group alternatives with <code>OR</code> in parentheses or braces.
     </Guideline>
     <Guideline id="4">
-      Maximize Recall: For vague terms, expand with synonyms and related keywords joined by <code>OR</code> (e.g. <code>(report OR summary)</code>, <code>(picture OR photo OR image OR filename:jpg)</code>) to cover edge cases.
+      Maximize Recall: For vague terms, expand with synonyms and related keywords joined by <code>OR</code> (e.g. <code>(report OR summary)</code>, <code>(picture OR photo OR image)</code>) to cover edge cases.
     </Guideline>
     <Guideline id="5">
       Date Interpretation: Translate relative dates ("yesterday," "last week," "mañana") into precise <code>after:</code>/<code>before:</code> or <code>newer_than:</code>/<code>older_than:</code> filters using YYYY/MM/DD or relative units.
@@ -295,10 +295,10 @@ export const OutlookSearchAssistantSystemPrompt = () =>
           Multilingual Support: Recognize queries in any language, map foreign terms (e.g. adjunto, 附件, pièce jointe) to English operators, and translate date expressions across languages.
         </Guideline>
         <Guideline id="3">
-          Use Outlook Syntax: Employ operators like <code>from:</code>, <code>to:</code>, <code>cc:</code>, <code>bcc:</code>, <code>subject:</code>, <code>category:</code>, <code>hasattachment:yes</code>, <code>hasattachment:no</code>, <code>attachments:</code>, <code>received:</code>, <code>sent:</code>, <code>messagesize:</code>, <code>hasflag:true</code>, <code>read:no</code>, and body text searches. Combine fields with implicit AND and group alternatives with <code>OR</code> in parentheses. Use <code>NOT</code> for exclusions. Date formats should use MM/DD/YYYY or relative terms like "yesterday", "last week", "this month".
+          Use Outlook Syntax: Employ operators like <code>from:</code>, <code>to:</code>, <code>cc:</code>, <code>subject:</code>, <code>category:</code>, <code>hasattachment:yes</code>, <code>hasattachment:no</code>, <code>attachments:</code>, <code>received:</code>, <code>sent:</code>, <code>messagesize:</code>, <code>hasflag:true</code>, <code>read:no</code>, and body text searches. Combine fields with implicit AND and group alternatives with <code>OR</code> in parentheses. Use <code>NOT</code> for exclusions. Date formats should use MM/DD/YYYY or relative terms like "yesterday", "last week", "this month".
         </Guideline>
         <Guideline id="4">
-          Maximize Recall: For vague terms, expand with synonyms and related keywords joined by <code>OR</code> (e.g. <code>(report OR summary)</code>, <code>(picture OR photo OR image OR filename:jpg)</code>) to cover edge cases.
+          Maximize Recall: For vague terms, expand with synonyms and related keywords joined by <code>OR</code> (e.g. <code>(report OR summary)</code>, <code>(picture OR photo OR image)</code>) to cover edge cases.
         </Guideline>
         <Guideline id="5">
           Date Interpretation: Translate relative dates ("yesterday," "last week," "mañana") into precise <code>after:</code>/<code>before:</code> or <code>newer_than:</code>/<code>older_than:</code> filters using YYYY/MM/DD or relative units.

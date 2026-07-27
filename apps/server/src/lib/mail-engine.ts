@@ -22,6 +22,7 @@ import {
   applyFolderLedgerDelta,
   clearFolderLedger,
   clearFolderSyncData,
+  intersectThreadIdsByLabel,
   type IndexLabel,
 } from './mail-index';
 import { generateWhatUserCaresAbout, type UserTopic } from './analyze/interests';
@@ -143,7 +144,12 @@ export class MailEngine {
     labelIds?: string[];
     pageToken?: string;
   }): Promise<IGetThreadsResponse> {
-    return await this.driver.list(params);
+    return await this.driver.list({
+      ...params,
+      intersectFn: async (threadIds: string[], labelIds: string[]) => {
+        return await intersectThreadIdsByLabel(this.connectionId, threadIds, labelIds);
+      }
+    });
   }
 
   async modifyLabels(threadIds: string[], addLabelIds: string[], removeLabelIds: string[]) {

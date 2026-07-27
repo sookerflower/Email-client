@@ -17,6 +17,10 @@ import type { CreateDraftData } from '../schemas';
 import { StandardizedError } from './standardized-error';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
+import { parseSearch } from '../search-parser';
+import { compileSearch } from '../search-compiler';
+import { redis } from '../services';
+import crypto from 'crypto';
 
 /**
  * Minimal key/value contract for the user-label registry. Backed by workerd
@@ -568,21 +572,16 @@ export class ImapSmtpMailManager implements MailManager {
     maxResults?: number;
     labelIds?: string[];
     pageToken?: string | number;
+    intersectFn?: (threadIds: string[], labelIds: string[]) => Promise<string[]>;
   }) {
-    const { folder, query, maxResults = 50, pageToken } = params;
+    const { folder, query, maxResults = 50, pageToken, labelIds = [], intersectFn } = params;
     return this.withErrorHandler(
       'list',
       async () => {
-        const path = await this.resolveFolder(this.folderKindFromZeroName(folder));
-        if (!path) return { threads: [], nextPageToken: null };
-
         const client = await this.connect();
-        const mailbox = await client.mailboxOpen(path);
-        if (mailbox.exists === 0) return { threads: [], nextPageToken: null };
-
-        const offset = Number(pageToken ?? 0) || 0;
         const metas: MessageMeta[] = [];
         let nextPageToken: string | null = null;
+        let incomplete = false;
 
         const fetchQuery = {
           envelope: true,
@@ -592,19 +591,186 @@ export class ImapSmtpMailManager implements MailManager {
         };
 
         if (query) {
-          // Basic full-text search; refine per-field later if needed.
-          const uids = ((await client.search({ text: query }, { uid: true })) || []).sort(
-            (a, b) => a - b,
-          );
-          const windowEnd = uids.length - offset;
-          if (windowEnd <= 0) return { threads: [], nextPageToken: null };
-          const window = uids.slice(Math.max(0, windowEnd - maxResults), windowEnd);
-          if (window.length === 0) return { threads: [], nextPageToken: null };
-          for await (const item of client.fetch(window.join(','), fetchQuery, { uid: true })) {
-            metas.push(this.toMessageMeta(item));
+          const ast = parseSearch(query);
+          const compiled = compileSearch(ast, folder);
+          
+          const combinedLabelIds = Array.from(new Set([...labelIds, ...compiled.postgresLabelIds]));
+
+          const targetMailboxes: string[] = [];
+          if (compiled.folders.include.includes('anywhere')) {
+            const allFolders = await client.list();
+            targetMailboxes.push(...allFolders.map(f => f.path));
+          } else {
+            for (const f of compiled.folders.include) {
+              const path = await this.resolveFolder(this.folderKindFromZeroName(f));
+              if (path) targetMailboxes.push(path);
+            }
           }
-          nextPageToken = windowEnd - window.length > 0 ? String(offset + window.length) : null;
+          
+          const excludedPaths = new Set<string>();
+          for (const f of compiled.folders.exclude) {
+            const path = await this.resolveFolder(this.folderKindFromZeroName(f));
+            if (path) excludedPaths.add(path);
+          }
+          
+          const finalMailboxes = targetMailboxes.filter(m => !excludedPaths.has(m));
+          if (finalMailboxes.length === 0) return { threads: [], nextPageToken: null };
+
+          if (finalMailboxes.length > 20) {
+            finalMailboxes.length = 20;
+            incomplete = true;
+          }
+
+          // Cache key MUST include connectionId, not just email.
+          // email alone is not unique: two connections (OAuth + IMAP) for the
+          // same address would share a cache entry — a cross-account data leak.
+          const connScope = this.config.auth.connectionId ?? this.config.auth.email;
+          const hashObj = {
+            connScope,
+            mailboxes: finalMailboxes,
+            criteria: compiled.imapCriteria,
+          };
+          const cacheKey = `search:${connScope}:${crypto.createHash('sha256').update(JSON.stringify(hashObj)).digest('hex')}`;
+          
+          type CachedItem = { folder: string, uid: number, time: number };
+          let sortedItems: CachedItem[] = [];
+          
+          let offset = 0;
+          let isValidPageToken = false;
+          if (typeof pageToken === 'string' && pageToken.startsWith(cacheKey + ':')) {
+            offset = parseInt(pageToken.split(':')[1] || '0', 10);
+            const cached = await redis().get<string>(cacheKey);
+            if (cached) {
+              sortedItems = JSON.parse(cached);
+              isValidPageToken = true;
+            }
+          }
+
+          if (!isValidPageToken) {
+            offset = 0;
+            for (const mboxPath of finalMailboxes) {
+              try {
+                const mailbox = await client.mailboxOpen(mboxPath);
+                if (mailbox.exists === 0) continue;
+                
+                const uids = await client.search(compiled.imapCriteria, { uid: true });
+                if (!uids || (uids as number[]).length === 0) continue;
+                
+                const uidsArr = uids as number[];
+                const cappedUids = uidsArr.sort((a,b)=>b-a).slice(0, 5000);
+                if (cappedUids.length < uidsArr.length) incomplete = true;
+                
+                for await (const msg of client.fetch(cappedUids.join(','), { uid: true, internalDate: true }, { uid: true })) {
+                  sortedItems.push({
+                    folder: mboxPath,
+                    uid: msg.uid,
+                    time: new Date(msg.internalDate!).getTime()
+                  });
+                }
+              } catch (e) {
+                console.error("Mailbox open error in search", e);
+              }
+            }
+            
+            sortedItems.sort((a, b) => b.time - a.time);
+            await redis().setex(cacheKey, 300, JSON.stringify(sortedItems));
+          }
+
+          let foundThreads: string[] = [];
+          let currentOffset = offset;
+          const MAX_UIDS_SCANNED = 2000;
+          let uidsScanned = 0;
+          
+          const pendingMetas: MessageMeta[] = [];
+
+          while (foundThreads.length < maxResults && currentOffset < sortedItems.length && uidsScanned < MAX_UIDS_SCANNED) {
+            const batchSize = 500;
+            const batch = sortedItems.slice(currentOffset, currentOffset + batchSize);
+            if (batch.length === 0) break;
+            
+            currentOffset += batch.length;
+            uidsScanned += batch.length;
+
+            const batchMetas: MessageMeta[] = [];
+            const byFolder = new Map<string, number[]>();
+            for (const item of batch) {
+              const arr = byFolder.get(item.folder) || [];
+              arr.push(item.uid);
+              byFolder.set(item.folder, arr);
+            }
+
+            for (const [f, uids] of byFolder.entries()) {
+              try {
+                await client.mailboxOpen(f);
+                for await (const msg of client.fetch(uids.join(','), fetchQuery, { uid: true })) {
+                  const meta = this.toMessageMeta(msg);
+                  batchMetas.push(meta);
+                  pendingMetas.push(meta);
+                }
+              } catch (e) {}
+            }
+
+            const batchGroups = groupIntoThreads(batchMetas);
+            const batchThreadIds = batchGroups.map(g => encodeThreadId(g.rootId));
+
+            let passed = batchThreadIds;
+            if (combinedLabelIds.length > 0 && intersectFn) {
+               passed = await intersectFn(batchThreadIds, combinedLabelIds);
+            }
+            
+            for (const tid of passed) {
+              if (!foundThreads.includes(tid)) {
+                foundThreads.push(tid);
+              }
+            }
+          }
+
+          if (uidsScanned >= MAX_UIDS_SCANNED && foundThreads.length < maxResults && currentOffset < sortedItems.length) {
+            incomplete = true;
+          }
+
+          if (currentOffset < sortedItems.length) {
+            nextPageToken = `${cacheKey}:${currentOffset}`;
+          }
+
+          const finalGroups = groupIntoThreads(pendingMetas)
+             .filter(g => foundThreads.includes(encodeThreadId(g.rootId)))
+             .slice(0, maxResults);
+             
+          const newestOf = (g: { messages: MessageMeta[] }) =>
+            Math.max(...g.messages.map((m) => m.date.getTime()));
+          finalGroups.sort((a, b) => newestOf(b) - newestOf(a));
+
+          return {
+            threads: finalGroups.map((g) => {
+              const newest = [...g.messages].sort(
+                (a, b) => b.date.getTime() - a.date.getTime(),
+              )[0]!;
+              return {
+                id: encodeThreadId(g.rootId),
+                historyId: null,
+                $raw: {
+                  folder: "mixed",
+                  subject: newest.subject,
+                  from: newest.from,
+                  date: newest.date.toISOString(),
+                  unread: g.messages.some((m) => m.unread),
+                  messageCount: g.messages.length,
+                  uids: g.messages.map((m) => m.uid),
+                  incomplete
+                },
+              };
+            }),
+            nextPageToken,
+          };
+
         } else {
+          const path = await this.resolveFolder(this.folderKindFromZeroName(folder));
+          if (!path) return { threads: [], nextPageToken: null };
+          const mailbox = await client.mailboxOpen(path);
+          if (mailbox.exists === 0) return { threads: [], nextPageToken: null };
+
+          const offset = Number(pageToken ?? 0) || 0;
           const end = mailbox.exists - offset;
           if (end < 1) return { threads: [], nextPageToken: null };
           const start = Math.max(1, end - maxResults + 1);
@@ -612,35 +778,34 @@ export class ImapSmtpMailManager implements MailManager {
             metas.push(this.toMessageMeta(item));
           }
           nextPageToken = start > 1 ? String(offset + (end - start + 1)) : null;
+          
+          const groups = groupIntoThreads(metas);
+          const newestOf = (g: { messages: MessageMeta[] }) =>
+            Math.max(...g.messages.map((m) => m.date.getTime()));
+          groups.sort((a, b) => newestOf(b) - newestOf(a));
+
+          return {
+            threads: groups.map((g) => {
+              const newest = [...g.messages].sort(
+                (a, b) => b.date.getTime() - a.date.getTime(),
+              )[0]!;
+              return {
+                id: encodeThreadId(g.rootId),
+                historyId: null,
+                $raw: {
+                  folder: path,
+                  subject: newest.subject,
+                  from: newest.from,
+                  date: newest.date.toISOString(),
+                  unread: g.messages.some((m) => m.unread),
+                  messageCount: g.messages.length,
+                  uids: g.messages.map((m) => m.uid),
+                },
+              };
+            }),
+            nextPageToken,
+          };
         }
-
-        const groups = groupIntoThreads(metas);
-        // Newest thread first, by the newest message inside each thread.
-        const newestOf = (g: { messages: MessageMeta[] }) =>
-          Math.max(...g.messages.map((m) => m.date.getTime()));
-        groups.sort((a, b) => newestOf(b) - newestOf(a));
-
-        return {
-          threads: groups.map((g) => {
-            const newest = [...g.messages].sort(
-              (a, b) => b.date.getTime() - a.date.getTime(),
-            )[0]!;
-            return {
-              id: encodeThreadId(g.rootId),
-              historyId: null,
-              $raw: {
-                folder: path,
-                subject: newest.subject,
-                from: newest.from,
-                date: newest.date.toISOString(),
-                unread: g.messages.some((m) => m.unread),
-                messageCount: g.messages.length,
-                uids: g.messages.map((m) => m.uid),
-              },
-            };
-          }),
-          nextPageToken,
-        };
       },
       { folder, query, maxResults, pageToken, email: this.config.auth.email },
     );

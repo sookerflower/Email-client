@@ -28,7 +28,7 @@ RUN pnpm install --prod --ignore-scripts
 FROM base AS builder
 WORKDIR /app
 
-RUN npm install -g pnpm wrangler
+RUN npm install -g pnpm
 
 # Copy workspace configuration and source code
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
@@ -53,7 +53,7 @@ RUN cd apps/mail && pnpm run build
 FROM base AS runner
 WORKDIR /app
 
-RUN npm install -g wrangler
+RUN npm install -g pnpm
 
 RUN addgroup -S -g 1001 pnpm && \
     adduser -S -u 1001 nextjs -G pnpm

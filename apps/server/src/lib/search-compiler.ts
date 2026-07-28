@@ -126,6 +126,7 @@ export function compileSearch(ast: SearchASTNode | null, baseFolder?: string): C
   if (!includesTrashOrSpam && !folders.include.includes('anywhere')) {
     if (!folders.exclude.includes('trash')) folders.exclude.push('trash');
     if (!folders.exclude.includes('spam')) folders.exclude.push('spam');
+    if (!folders.exclude.includes('drafts')) folders.exclude.push('drafts');
   }
 
   return { folders, postgresLabelIds, imapCriteria };

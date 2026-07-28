@@ -165,6 +165,7 @@ export interface MailManager {
   }): Promise<{
     threads: { id: string; historyId: string | null; $raw?: unknown }[];
     nextPageToken: string | null;
+    incomplete?: boolean;
   }>;
   count(): Promise<{ count?: number; label?: string }[]>;
   getTokens(
@@ -203,6 +204,7 @@ export interface MailManager {
 export interface IGetThreadsResponse {
   threads: { id: string; historyId: string | null; $raw?: unknown }[];
   nextPageToken: string | null;
+  incomplete?: boolean;
 }
 
 export const IGetThreadsResponseSchema = z.object({
@@ -214,4 +216,5 @@ export const IGetThreadsResponseSchema = z.object({
     }),
   ),
   nextPageToken: z.string().nullable(),
+  incomplete: z.boolean().optional(),
 });

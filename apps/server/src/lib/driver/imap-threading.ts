@@ -78,14 +78,9 @@ function setParent<T>(child: Container<T>, parent: Container<T>): void {
 
 /**
  * Group messages into threads via their reference chains.
- *
- * Messages without a Message-ID become singleton threads with a synthetic
- * root id (callers should substitute a stable per-message fallback id such
- * as the IMAP UID before display).
  */
 export function groupIntoThreads<T extends ThreadableMessage>(messages: T[]): ThreadGroup<T>[] {
   const containers = new Map<string, Container<T>>();
-  let syntheticCounter = 0;
 
   const containerFor = (id: string): Container<T> => {
     let c = containers.get(id);
@@ -112,7 +107,8 @@ export function groupIntoThreads<T extends ThreadableMessage>(messages: T[]): Th
     }
 
     // 2. Attach the message's own container under the last reference.
-    const selfId = message.messageId ?? `zero-synthetic-${syntheticCounter++}`;
+    if (!message.messageId) throw new Error("ThreadableMessage missing messageId");
+    const selfId = message.messageId;
     const self = containerFor(selfId);
 
     if (self.message !== undefined && message.messageId !== undefined) {

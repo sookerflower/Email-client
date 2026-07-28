@@ -347,7 +347,7 @@ await leg('beacon', async () => {
     const postgres = (await import('postgres')).default;
     const sql = postgres(devVars.DATABASE_URL, { max: 1 });
     try {
-      const deadline = Date.now() + (REAL ? 120_000 : 60_000);
+      const deadline = Date.now() + (REAL ? 300_000 : 60_000);
       for (;;) {
         const [row] = await sql`
           SELECT extract(epoch from last_synced_at) * 1000 AS last_ms

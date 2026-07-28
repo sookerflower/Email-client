@@ -1055,7 +1055,15 @@ if (!REAL) {
       }
 
       const server = await rawInboxState();
-      const after = await pgRow(connectionId);
+      
+      let after = await pgRow(connectionId);
+      const afterDeadline = Date.now() + 60_000;
+      while (after?.uid_validity == null) {
+        if (Date.now() > afterDeadline) throw new Error('sync did not record uid_validity after the change');
+        await new Promise((r) => setTimeout(r, 1000));
+        after = await pgRow(connectionId);
+      }
+
       if (Number(after?.uid_validity) === Number(before.uid_validity))
         throw new Error('stored uid_validity did not change');
       if (Number(after?.uid_validity) !== server.uidValidity)
@@ -1102,6 +1110,98 @@ if (!REAL) {
     }
   });
 }
+
+await leg('list-sort', async () => {
+  // Append newer message first (so it gets the LOWER UID), then older second.
+  // We explicitly set Date headers to control logical age independent of IMAP APPEND order.
+  const subOlder = `sort older ${runId}`;
+  const subNewer = `sort newer ${runId}`;
+  const marker = `sort marker ${runId}`;
+  
+  const client = await rawImap();
+  try {
+    const newerRaw = `Date: Tue, 01 Jan 2030 10:05:00 +0000\r\nSubject: ${subNewer}\r\nFrom: e2e@test\r\n\r\n${marker}`;
+    await client.append('INBOX', newerRaw, ['\\Seen']);
+    const olderRaw = `Date: Tue, 01 Jan 2030 10:00:00 +0000\r\nSubject: ${subOlder}\r\nFrom: e2e@test\r\n\r\n${marker}`;
+    await client.append('INBOX', olderRaw, ['\\Seen']);
+  } finally {
+    await client.logout();
+  }
+
+  // Force sync to ingest the new messages via jobs
+  const result = await trpc('connections.list', { query: null });
+  const all = result?.connections ?? [];
+  const connectionId = (all.find((c) => c.email === mode.email) ?? all[0])?.id;
+  await enqueueInboxSync(connectionId);
+
+  // Poll until both are visible in the API. Window covers job completion.
+  const windowMs = REAL ? 120_000 : 90_000;
+  const deadline = Date.now() + windowMs;
+  while (!((await subjectInInbox(subOlder, 25)) && (await subjectInInbox(subNewer, 25)))) {
+    if (Date.now() > deadline) throw new Error('sort messages never synced');
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+
+  // Search by marker so both are returned
+  const searchResult = await trpc('mail.listThreads', { query: { folder: 'inbox', q: marker } });
+  const threads = searchResult.threads ?? [];
+  if (threads.length < 2) throw new Error(`Expected at least 2 threads from search, got ${threads.length}`);
+
+  // Newest first: the first thread returned must be the NEWER one by date, despite having the LOWER UID.
+  const firstThread = await trpc('mail.get', { query: { id: threads[0].id } });
+  if (firstThread?.latest?.subject !== subNewer) {
+    throw new Error(`Search sorting failed: First thread was "${firstThread?.latest?.subject}", expected "${subNewer}"`);
+  }
+
+  return `search returns newer thread first despite lower UID`;
+});
+
+await leg('derived-vs-stored-threadId', async () => {
+  // Append two messages without Message-ID headers to verify synthetic fallback threadIDs
+  // round-trip stably through search -> get.
+  const sub1 = `derived no-id one ${runId}`;
+  const sub2 = `derived no-id two ${runId}`;
+  const marker = `derived marker ${runId}`;
+  
+  const client = await rawImap();
+  try {
+    const raw1 = `Date: Tue, 01 Jan 2030 11:00:00 +0000\r\nSubject: ${sub1}\r\nFrom: e2e@test\r\n\r\n${marker}`;
+    await client.append('INBOX', raw1, ['\\Seen']);
+    const raw2 = `Date: Tue, 01 Jan 2030 11:05:00 +0000\r\nSubject: ${sub2}\r\nFrom: e2e@test\r\n\r\n${marker}`;
+    await client.append('INBOX', raw2, ['\\Seen']);
+  } finally {
+    await client.logout();
+  }
+
+  // Force sync
+  const result = await trpc('connections.list', { query: null });
+  const all = result?.connections ?? [];
+  const connectionId = (all.find((c) => c.email === mode.email) ?? all[0])?.id;
+  await enqueueInboxSync(connectionId);
+
+  // Poll for visibility
+  const windowMs = REAL ? 120_000 : 90_000;
+  const deadline = Date.now() + windowMs;
+  while (!((await subjectInInbox(sub1, 25)) && (await subjectInInbox(sub2, 25)))) {
+    if (Date.now() > deadline) throw new Error('derived messages never synced');
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+
+  // Search matching only the SECOND one
+  const searchResult = await trpc('mail.listThreads', { query: { folder: 'inbox', q: sub2 } });
+  const threads = searchResult.threads ?? [];
+  if (threads.length === 0) throw new Error('Search for second message returned 0 threads');
+
+  const searchedId = threads[0].id;
+  
+  // Verify it can be fetched by ID and matches
+  const fetched = await trpc('mail.get', { query: { id: searchedId } });
+  if (fetched?.latest?.subject !== sub2) {
+    throw new Error(`Fetched thread subject "${fetched?.latest?.subject}" != expected "${sub2}"`);
+  }
+
+  return `derived thread ID ${searchedId} round-trips correctly through search -> get`;
+});
 
 await leg('census-ceiling', async () => {
   // The standing 6.3 regression assertion, LAST on purpose: maxImap is the

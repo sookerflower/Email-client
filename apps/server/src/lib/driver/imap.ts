@@ -121,6 +121,7 @@ interface MessageMeta extends ThreadableMessage {
   from: string;
   unread: boolean;
   flags: Set<string>;
+  labelIds: string[];
 }
 
 const toB64Url = (value: string) => Buffer.from(value, 'utf-8').toString('base64url');
@@ -304,7 +305,8 @@ export class ImapSmtpMailManager implements MailManager {
       path = FOLDER_NAME_FALLBACKS[kind][0];
       try {
         await client.mailboxCreate(path!);
-      } catch {
+      } catch (err) {
+        console.error(`[resolveFolder] mailboxCreate(${path}) failed:`, (err as Error).message);
         // Already exists or cannot create — mailboxOpen will surface real errors.
       }
     }
@@ -435,7 +437,7 @@ export class ImapSmtpMailManager implements MailManager {
           if (mailbox.exists > 0) {
             const start = Math.max(1, mailbox.exists - windowSize + 1);
             for await (const item of client.fetch(`${start}:${mailbox.exists}`, fetchQuery)) {
-              metas.push(this.toMessageMeta(item));
+              metas.push(this.toMessageMeta(item, path, mailbox.uidValidity));
             }
           }
           return {
@@ -476,7 +478,7 @@ export class ImapSmtpMailManager implements MailManager {
               uid: true,
               changedSince: BigInt(cursor.highestModseq!),
             })) {
-              changedMetas.push(this.toMessageMeta(item));
+              changedMetas.push(this.toMessageMeta(item, path, mailbox.uidValidity));
             }
           }
         } else {
@@ -486,7 +488,7 @@ export class ImapSmtpMailManager implements MailManager {
             for await (const item of client.fetch(`${cursor.uidNext}:*`, fetchQuery, {
               uid: true,
             })) {
-              if (item.uid >= cursor.uidNext) changedMetas.push(this.toMessageMeta(item));
+              if (item.uid >= cursor.uidNext) changedMetas.push(this.toMessageMeta(item, path, mailbox.uidValidity));
             }
           }
           // Flag convergence: bounded flags-only sweep of the known window.
@@ -507,7 +509,7 @@ export class ImapSmtpMailManager implements MailManager {
               for await (const item of client.fetch(changedUids.join(','), fetchQuery, {
                 uid: true,
               })) {
-                changedMetas.push(this.toMessageMeta(item));
+                changedMetas.push(this.toMessageMeta(item, path, mailbox.uidValidity));
               }
             }
           }
@@ -613,8 +615,19 @@ export class ImapSmtpMailManager implements MailManager {
             if (path) excludedPaths.add(path);
           }
           
-          const finalMailboxes = targetMailboxes.filter(m => !excludedPaths.has(m));
+          let finalMailboxes = targetMailboxes.filter(m => !excludedPaths.has(m));
           if (finalMailboxes.length === 0) return { threads: [], nextPageToken: null };
+
+          const currentFolderPath = await this.resolveFolder(this.folderKindFromZeroName(folder));
+          const inboxPath = await this.resolveFolder('inbox');
+          
+          finalMailboxes.sort((a, b) => {
+            if (a === currentFolderPath) return -1;
+            if (b === currentFolderPath) return 1;
+            if (a === inboxPath) return -1;
+            if (b === inboxPath) return 1;
+            return a.localeCompare(b);
+          });
 
           if (finalMailboxes.length > 20) {
             finalMailboxes.length = 20;
@@ -624,20 +637,18 @@ export class ImapSmtpMailManager implements MailManager {
           // Cache key MUST include connectionId, not just email.
           // email alone is not unique: two connections (OAuth + IMAP) for the
           // same address would share a cache entry — a cross-account data leak.
-          const connScope = this.config.auth.connectionId ?? this.config.auth.email;
-          const hashObj = {
-            connScope,
-            mailboxes: finalMailboxes,
-            criteria: compiled.imapCriteria,
-          };
-          const cacheKey = `search:${connScope}:${crypto.createHash('sha256').update(JSON.stringify(hashObj)).digest('hex')}`;
+          if (!this.config.auth.connectionId) throw new Error('connectionId required for search cache isolation');
+          const searchHash = crypto.createHash('sha256')
+            .update(JSON.stringify({ criteria: compiled.imapCriteria, boxes: finalMailboxes }))
+            .digest('hex');
+          const cacheKey = `search:${this.config.auth.connectionId}:${searchHash}`;
           
           type CachedItem = { folder: string, uid: number, time: number };
           let sortedItems: CachedItem[] = [];
           
           let offset = 0;
           let isValidPageToken = false;
-          if (typeof pageToken === 'string' && pageToken.startsWith(cacheKey + ':')) {
+          if (typeof pageToken === 'string' && pageToken.startsWith(searchHash + ':')) {
             offset = parseInt(pageToken.split(':')[1] || '0', 10);
             const cached = await redis().get<string>(cacheKey);
             if (cached) {
@@ -698,29 +709,37 @@ export class ImapSmtpMailManager implements MailManager {
               arr.push(item.uid);
               byFolder.set(item.folder, arr);
             }
-
             for (const [f, uids] of byFolder.entries()) {
               try {
-                await client.mailboxOpen(f);
-                for await (const msg of client.fetch(uids.join(','), fetchQuery, { uid: true })) {
-                  const meta = this.toMessageMeta(msg);
-                  batchMetas.push(meta);
+                  const mb = await client.mailboxOpen(f);
+                  for await (const msg of client.fetch(uids.join(','), fetchQuery, { uid: true })) {
+                    const meta = this.toMessageMeta(msg, f, mb.uidValidity);
+                    batchMetas.push(meta);
                   pendingMetas.push(meta);
                 }
-              } catch (e) {}
+              } catch {}
             }
 
-            const batchGroups = groupIntoThreads(batchMetas);
-            const batchThreadIds = batchGroups.map(g => encodeThreadId(g.rootId));
-
-            let passed = batchThreadIds;
-            if (combinedLabelIds.length > 0 && intersectFn) {
-               passed = await intersectFn(batchThreadIds, combinedLabelIds);
-            }
-            
-            for (const tid of passed) {
-              if (!foundThreads.includes(tid)) {
-                foundThreads.push(tid);
+            if (combinedLabelIds.length === 0) {
+               const allGroups = groupIntoThreads(pendingMetas);
+               if (allGroups.length >= maxResults) {
+                 foundThreads = allGroups.slice(0, maxResults).map(g => encodeThreadId(g.rootId));
+                 break;
+               }
+               foundThreads = allGroups.map(g => encodeThreadId(g.rootId));
+            } else {
+              const batchGroups = groupIntoThreads(batchMetas);
+              const batchThreadIds = batchGroups.map(g => encodeThreadId(g.rootId));
+  
+              let passed = batchThreadIds;
+              if (intersectFn) {
+                 passed = await intersectFn(batchThreadIds, combinedLabelIds);
+              }
+              
+              for (const tid of passed) {
+                if (!foundThreads.includes(tid)) {
+                  foundThreads.push(tid);
+                }
               }
             }
           }
@@ -730,7 +749,7 @@ export class ImapSmtpMailManager implements MailManager {
           }
 
           if (currentOffset < sortedItems.length) {
-            nextPageToken = `${cacheKey}:${currentOffset}`;
+            nextPageToken = `${searchHash}:${currentOffset}`;
           }
 
           const finalGroups = groupIntoThreads(pendingMetas)
@@ -775,7 +794,7 @@ export class ImapSmtpMailManager implements MailManager {
           if (end < 1) return { threads: [], nextPageToken: null };
           const start = Math.max(1, end - maxResults + 1);
           for await (const item of client.fetch(`${start}:${end}`, fetchQuery)) {
-            metas.push(this.toMessageMeta(item));
+            metas.push(this.toMessageMeta(item, path, mailbox.uidValidity));
           }
           nextPageToken = start > 1 ? String(offset + (end - start + 1)) : null;
           
@@ -811,14 +830,34 @@ export class ImapSmtpMailManager implements MailManager {
     );
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private toMessageMeta(item: any): MessageMeta {
+  private getFolderKind(folderPath: string): FolderKind | null {
+    if (folderPath.toUpperCase() === 'INBOX') return 'inbox';
+    for (const [kind, path] of Object.entries(this.folderCache)) {
+      if (path === folderPath) return kind as FolderKind;
+    }
+    return null;
+  }
+
+  private toMessageMeta(item: any, folder: string, uidValidity: bigint | number): MessageMeta {
     const headerText = item.headers ? item.headers.toString('utf-8') : '';
     const referencesRaw = headerText.match(/^references:([\s\S]*?)(?=^\S|Z)/im)?.[1] ?? '';
     const flags: Set<string> = item.flags ?? new Set<string>();
+    
+    const kind = this.getFolderKind(folder);
+    const labelIds = [
+      kind === 'inbox' ? 'INBOX' : undefined,
+      kind === 'sent' ? 'SENT' : undefined,
+      kind === 'trash' ? 'TRASH' : undefined,
+      kind === 'junk' ? 'SPAM' : undefined,
+      kind === 'drafts' ? 'DRAFT' : undefined,
+      ...[...flags]
+        .filter((f) => f.startsWith(KEYWORD_PREFIX))
+        .map((f) => f.substring(KEYWORD_PREFIX.length)),
+    ].filter(Boolean) as string[];
+
     return {
       uid: item.uid,
-      messageId: normalizeMessageId(item.envelope?.messageId),
+      messageId: normalizeMessageId(item.envelope?.messageId) || encodeMessageId(folder, uidValidity, item.uid),
       inReplyTo: normalizeMessageId(item.envelope?.inReplyTo),
       references: parseReferencesHeader(referencesRaw),
       date: item.envelope?.date ?? new Date(0),
@@ -826,6 +865,7 @@ export class ImapSmtpMailManager implements MailManager {
       from: item.envelope?.from?.[0]?.address ?? '',
       unread: !flags.has('\\Seen'),
       flags,
+      labelIds,
     };
   }
 
@@ -857,8 +897,13 @@ export class ImapSmtpMailManager implements MailManager {
           }
           if (mailbox.exists === 0) continue;
 
-          const uids =
-            (await client.search(
+          let uids: number[] = [];
+          const synthetic = decodeMessageId(rootId);
+          if (synthetic && synthetic.folder === path) {
+            // Synthetic singleton thread, direct ID lookup instead of search
+            uids = [synthetic.uid];
+          } else if (!synthetic) {
+            uids = (await client.search(
               {
                 or: [
                   { header: { 'message-id': rootId } },
@@ -867,7 +912,8 @@ export class ImapSmtpMailManager implements MailManager {
                 ],
               },
               { uid: true },
-            )) || [];
+            )) as number[] || [];
+          }
           if (uids.length === 0) continue;
 
           for (const uid of uids) {
@@ -992,18 +1038,23 @@ export class ImapSmtpMailManager implements MailManager {
       }
       const uids = new Set<number>();
       for (const rootId of rootIds) {
-        const found =
-          (await client.search(
-            {
-              or: [
-                { header: { 'message-id': rootId } },
-                { header: { references: rootId } },
-                { header: { 'in-reply-to': rootId } },
-              ],
-            },
-            { uid: true },
-          )) || [];
-        found.forEach((u) => uids.add(u));
+        const synthetic = decodeMessageId(rootId);
+        if (synthetic && synthetic.folder === path) {
+          uids.add(synthetic.uid);
+        } else if (!synthetic) {
+          const found =
+            (await client.search(
+              {
+                or: [
+                  { header: { 'message-id': rootId } },
+                  { header: { references: rootId } },
+                  { header: { 'in-reply-to': rootId } },
+                ],
+              },
+              { uid: true },
+            )) || [];
+          found.forEach((u) => uids.add(u));
+        }
       }
       if (uids.size > 0) byFolder.set(path, [...uids].sort((a, b) => a - b));
     }

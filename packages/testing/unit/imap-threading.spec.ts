@@ -122,8 +122,8 @@ describe('groupIntoThreads', () => {
     expect(groups[0]!.rootId).toBe('a@x');
   });
 
-  it('treats messages without Message-ID as singleton threads', () => {
-    const groups = groupIntoThreads([msg(undefined), msg(undefined)]);
+  it('treats messages with unique synthetic Message-IDs as singleton threads', () => {
+    const groups = groupIntoThreads([msg('synthetic-1'), msg('synthetic-2')]);
     expect(groups).toHaveLength(2);
   });
 

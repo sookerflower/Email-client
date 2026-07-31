@@ -35,6 +35,42 @@ import { generateWhatUserCaresAbout, type UserTopic } from './analyze/interests'
  * no other mail client can see. IMPORTANT and MUTE used to live here and were
  * removed for exactly that reason -- nothing derived them and nothing could
  * filter on them.
+ *
+ * ---------------------------------------------------------------------------
+ * SNOOZED IS A KNOWN SPLIT-BRAIN. Decision deferred until after the action
+ * matrix; do not "tidy" it before then, and do not assume it behaves like the
+ * dead labels above -- it is LIVE state split across two stores that can
+ * disagree:
+ *
+ *   Redis (snoozeStore) drives WAKING     -- unsnoozeSweep acts on listDue()
+ *   Postgres (SNOOZED label) drives VISIBILITY -- the Snoozed view is a
+ *                                                thread_label query
+ *
+ * Neither derives from the other; snoozeThreads writes both independently.
+ *   - Postgres wiped -> wake times orphaned in Redis. The sweep later
+ *     un-snoozes threads that are no longer snoozed. SILENT CORRUPTION, which
+ *     is worse than the plain state loss the dead labels caused.
+ *   - Redis wiped -> labels persist, threads sit in Snoozed forever, never
+ *     waking.
+ *
+ * Three defensible fixes, all deferred:
+ *   1. Postgres authoritative: add a wake_at column beside the label, keep
+ *      Redis as a rebuildable scheduling index. Conventional, no split-brain,
+ *      but snooze still dies with the DB.
+ *   2. Redis authoritative: survives a DB wipe, but makes the cache the
+ *      source of truth for user state. Checked 2026-07-31 on the local
+ *      compose: maxmemory-policy=noeviction, maxmemory=0, appendonly=yes --
+ *      so keys are NOT evictable here and AOF is on. That removes the usual
+ *      objection for THIS environment only; docker-compose.prod.yaml sets no
+ *      overrides, so verify before relying on it anywhere else.
+ *   3. IMAP authoritative: encode the wake time in a keyword
+ *      ($zl_snooze_<epoch>). Ugly, and a reschedule is remove-then-add, but
+ *      it is the only option consistent with the invariant this workstream
+ *      exists to restore, and it survives both wipes.
+ *
+ * The action matrix's DB-wipe leg must EXCLUDE snooze and say why, or it will
+ * assert a guarantee no option currently provides.
+ * ---------------------------------------------------------------------------
  */
 const INDEX_ONLY_LABELS = new Set(['SNOOZED']);
 import { redis } from './services';

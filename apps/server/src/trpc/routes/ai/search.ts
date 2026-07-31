@@ -4,6 +4,7 @@ import {
   OutlookSearchAssistantSystemPrompt,
 } from '../../../lib/prompts';
 import { activeDriverProcedure } from '../../trpc';
+import { coerceGeneratedQuery } from '../../../lib/search-query-guard';
 import { openai } from '../../../lib/ai-provider';
 import { generateText, tool } from 'ai';
 import { env } from '../../../env';
@@ -65,15 +66,10 @@ export const generateSearchQuery = activeDriverProcedure
     // text answer as valid rather than failing a search the model actually
     // answered. This is the "narrates a tool call as text" behaviour noted in
     // CLAUDE.md.
-    const text = (result.text ?? '')
-      .trim()
-      .replace(/^```[a-z]*\s*/i, '')
-      .replace(/```$/, '')
-      .split('\n')[0]
-      .trim();
-
-    if (!text) {
-      throw new Error('search query generation returned neither a tool call nor text');
-    }
-    return searchQuerySchema.parse({ query: text });
+    //
+    // GUARDED: coerceGeneratedQuery throws unless the content really is a
+    // query. Without it, narration ("Sure! Here are your unread emails from
+    // Alice") would become a free-text search for that sentence and return
+    // nothing -- a broken feature rather than an error.
+    return searchQuerySchema.parse({ query: coerceGeneratedQuery(result.text ?? '') });
   });

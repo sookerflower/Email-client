@@ -155,10 +155,31 @@ with the incidents and verification numbers. Read it before doing anything.
   - **Cutover-readiness realities carried forward, NOT Phase 6 code tasks**:
     the ws.re.cx LLM proxy buffers SSE (chat arrives as one burst regardless
     of our streaming — proven ours delivers progressively; fix is proxy
-    config, outside this repo); qwen2.5:32b is unreliable at multi-step tool
-    chains (sometimes narrates a tool call as text instead of making it —
-    model-choice issue, not a repo bug). Both belong on an ops checklist, not
-    in code.
+    config, outside this repo).
+
+    **CORRECTED 2026-07-31** — this used to read "qwen2.5:32b is unreliable at
+    multi-step tool chains … model-choice issue, not a repo bug". That was
+    wrong in its conclusion and it stopped anyone from testing AI search for
+    weeks. Measured directly against ws.re.cx:
+      - `tool_choice` omitted / `'auto'` / `'required'` → NO tool call, empty
+        content. `'required'` is what the AI SDK's `generateObject` sends, so
+        every `generateObject` call against this endpoint fails with "No
+        object generated: the tool was not called".
+      - `tool_choice: {type:'function', function:{name:…}}` (named) → correct
+        tool call with valid JSON arguments.
+      - With a NAMED tool_choice but a substantial system prompt (~2.6k chars),
+        the model ignores the forced call and returns the answer as plain
+        content — and the answer is CORRECT. Only the delivery shape varies.
+    So it is a request-shape/prompt-size interaction, NOT a model capability
+    limit, and it IS actionable in this repo. `ai/search.ts` now uses
+    `generateText` + a named `toolChoice` and accepts a bare text answer as a
+    fallback; AI search passes end to end.
+
+    Chat (`routes/chat.ts`) uses `streamText` with `tools` and NO `toolChoice`
+    (auto) plus a large system prompt — a superset of the failing conditions
+    above, so the same behaviour very likely explains "narrates instead of
+    calling" there. Chat legitimately needs auto tool choice (the model must
+    pick), so the search fix does not transfer. NOT yet scoped or fixed.
 
 ## How to run / verify (Windows, Node 22)
 

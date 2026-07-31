@@ -604,12 +604,9 @@ if (ok) {
     UNREAD_KEYS,
     'The Unread category must filter the inbox down to unseen threads.',
   );
-  await assertControl(
-    'category dropdown: Important (labelIds=[IMPORTANT])',
-    { labelIds: ['IMPORTANT'], folder: 'inbox', maxResults: 200 },
-    ['starred_msg'],
-    'The Important category is offered in the UI; it should surface flagged/important mail rather than nothing.',
-  );
+  // No "Important" category leg: the category was removed from
+  // defaultMailCategories (see schemas.ts). Nothing produces an IMPORTANT
+  // label, and mapping it to \Flagged would duplicate STARRED.
 
   // 13. the four quick filters
   await assertControl(

@@ -52,15 +52,12 @@ export const mailCategorySchema = z.object({
 
 export type MailCategory = z.infer<typeof mailCategorySchema>;
 
+// NOTE: there is deliberately no "Important" category. Nothing in the sync
+// pipeline ever produces an IMPORTANT label and IMAP has no equivalent, so the
+// control returned nothing for everyone. Mapping it to \Flagged was rejected:
+// STARRED already maps there, so it would ship two controls with identical
+// results. Removed after the search control matrix caught it.
 export const defaultMailCategories: MailCategory[] = [
-  {
-    id: 'Important',
-    name: 'Important',
-    searchValue: 'IMPORTANT',
-    order: 0,
-    icon: 'Lightning',
-    isDefault: false,
-  },
   {
     id: 'All Mail',
     name: 'All Mail',

@@ -4,7 +4,7 @@ import {
   getZeroAgent,
   getZeroDB,
   getThread,
-  modifyThreadLabelsInDB,
+  applyThreadLabels,
   deleteAllSpam,
   reSyncThread,
 } from '../../lib/server-utils';
@@ -153,7 +153,7 @@ export const mailRouter = router({
                 now: new Date(nowTs).toISOString(),
               });
 
-              await modifyThreadLabelsInDB(activeConnection.id, t.id, ['INBOX'], ['SNOOZED']);
+              await applyThreadLabels(activeConnection.id, [t.id], ['INBOX'], ['SNOOZED']);
               await snoozeStore.delete(activeConnection.id, [t.id]);
             } catch (error) {
               console.error('[UNSNOOZE_ON_ACCESS] Failed for', t.id, error);
@@ -194,11 +194,8 @@ export const mailRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const { activeConnection } = ctx;
-      return Promise.all(
-        input.ids.map((threadId) =>
-          modifyThreadLabelsInDB(activeConnection.id, threadId, [], ['UNREAD']),
-        ),
-      );
+      // Write-through, batched: one IMAP round trip for the whole set.
+      return applyThreadLabels(activeConnection.id, input.ids, [], ['UNREAD']);
     }),
   markAsUnread: activeDriverProcedure
     .input(
@@ -209,11 +206,7 @@ export const mailRouter = router({
     // TODO: Add batching
     .mutation(async ({ input, ctx }) => {
       const { activeConnection } = ctx;
-      return Promise.all(
-        input.ids.map((threadId) =>
-          modifyThreadLabelsInDB(activeConnection.id, threadId, ['UNREAD'], []),
-        ),
-      );
+      return applyThreadLabels(activeConnection.id, input.ids, ['UNREAD'], []);
     }),
   markAsImportant: activeDriverProcedure
     .input(
@@ -223,11 +216,7 @@ export const mailRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const { activeConnection } = ctx;
-      return Promise.all(
-        input.ids.map((threadId) =>
-          modifyThreadLabelsInDB(activeConnection.id, threadId, ['IMPORTANT'], []),
-        ),
-      );
+      return applyThreadLabels(activeConnection.id, input.ids, ['IMPORTANT'], []);
     }),
   modifyLabels: activeDriverProcedure
     .input(
@@ -251,11 +240,7 @@ export const mailRouter = router({
       const { threadIds } = result;
 
       if (threadIds.length) {
-        await Promise.all(
-          threadIds.map((threadId) =>
-            modifyThreadLabelsInDB(activeConnection.id, threadId, addLabels, removeLabels),
-          ),
-        );
+        await applyThreadLabels(activeConnection.id, threadIds, addLabels, removeLabels);
         return { success: true };
       }
 
@@ -304,15 +289,11 @@ export const mailRouter = router({
 
       const shouldStar = processedThreads > 0 && !anyStarred;
 
-      await Promise.all(
-        threadIds.map((threadId) =>
-          modifyThreadLabelsInDB(
-            activeConnection.id,
-            threadId,
-            shouldStar ? ['STARRED'] : [],
-            shouldStar ? [] : ['STARRED'],
-          ),
-        ),
+      await applyThreadLabels(
+        activeConnection.id,
+        threadIds,
+        shouldStar ? ['STARRED'] : [],
+        shouldStar ? [] : ['STARRED'],
       );
 
       return { success: true };
@@ -358,15 +339,11 @@ export const mailRouter = router({
 
       const shouldMarkImportant = processedThreads > 0 && !anyImportant;
 
-      await Promise.all(
-        threadIds.map((threadId) =>
-          modifyThreadLabelsInDB(
-            activeConnection.id,
-            threadId,
-            shouldMarkImportant ? ['IMPORTANT'] : [],
-            shouldMarkImportant ? [] : ['IMPORTANT'],
-          ),
-        ),
+      await applyThreadLabels(
+        activeConnection.id,
+        threadIds,
+        shouldMarkImportant ? ['IMPORTANT'] : [],
+        shouldMarkImportant ? [] : ['IMPORTANT'],
       );
 
       return { success: true };
@@ -379,11 +356,7 @@ export const mailRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const { activeConnection } = ctx;
-      return Promise.all(
-        input.ids.map((threadId) =>
-          modifyThreadLabelsInDB(activeConnection.id, threadId, ['STARRED'], []),
-        ),
-      );
+      return applyThreadLabels(activeConnection.id, input.ids, ['STARRED'], []);
     }),
   bulkMarkImportant: activeDriverProcedure
     .input(
@@ -393,11 +366,7 @@ export const mailRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const { activeConnection } = ctx;
-      return Promise.all(
-        input.ids.map((threadId) =>
-          modifyThreadLabelsInDB(activeConnection.id, threadId, ['IMPORTANT'], []),
-        ),
-      );
+      return applyThreadLabels(activeConnection.id, input.ids, ['IMPORTANT'], []);
     }),
   bulkUnstar: activeDriverProcedure
     .input(
@@ -407,11 +376,7 @@ export const mailRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const { activeConnection } = ctx;
-      return Promise.all(
-        input.ids.map((threadId) =>
-          modifyThreadLabelsInDB(activeConnection.id, threadId, [], ['STARRED']),
-        ),
-      );
+      return applyThreadLabels(activeConnection.id, input.ids, [], ['STARRED']);
     }),
   deleteAllSpam: activeDriverProcedure.mutation(async ({ ctx }): Promise<DeleteAllSpamResponse> => {
     const { activeConnection } = ctx;
@@ -440,11 +405,7 @@ export const mailRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const { activeConnection } = ctx;
-      return Promise.all(
-        input.ids.map((threadId) =>
-          modifyThreadLabelsInDB(activeConnection.id, threadId, [], ['IMPORTANT']),
-        ),
-      );
+      return applyThreadLabels(activeConnection.id, input.ids, [], ['IMPORTANT']);
     }),
 
   send: activeDriverProcedure
@@ -638,11 +599,7 @@ export const mailRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const { activeConnection } = ctx;
-      return Promise.all(
-        input.ids.map((threadId) =>
-          modifyThreadLabelsInDB(activeConnection.id, threadId, ['TRASH'], []),
-        ),
-      );
+      return applyThreadLabels(activeConnection.id, input.ids, ['TRASH'], []);
     }),
   bulkArchive: activeDriverProcedure
     .input(
@@ -652,11 +609,7 @@ export const mailRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const { activeConnection } = ctx;
-      return Promise.all(
-        input.ids.map((threadId) =>
-          modifyThreadLabelsInDB(activeConnection.id, threadId, [], ['INBOX']),
-        ),
-      );
+      return applyThreadLabels(activeConnection.id, input.ids, [], ['INBOX']);
     }),
   bulkMute: activeDriverProcedure
     .input(
@@ -666,11 +619,7 @@ export const mailRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const { activeConnection } = ctx;
-      return Promise.all(
-        input.ids.map((threadId) =>
-          modifyThreadLabelsInDB(activeConnection.id, threadId, ['MUTE'], []),
-        ),
-      );
+      return applyThreadLabels(activeConnection.id, input.ids, ['MUTE'], []);
     }),
   getEmailAliases: activeDriverProcedure.query(async ({ ctx }) => {
     const { activeConnection } = ctx;
@@ -696,11 +645,7 @@ export const mailRouter = router({
         return { success: false, error: 'Snooze time must be in the future' };
       }
 
-      await Promise.all(
-        input.ids.map((threadId) =>
-          modifyThreadLabelsInDB(activeConnection.id, threadId, ['SNOOZED'], ['INBOX']),
-        ),
-      );
+      await applyThreadLabels(activeConnection.id, input.ids, ['SNOOZED'], ['INBOX']);
 
       await snoozeStore.set(activeConnection.id, input.ids, wakeAtDate);
 
@@ -715,11 +660,7 @@ export const mailRouter = router({
     .mutation(async ({ input, ctx }) => {
       const { activeConnection } = ctx;
       if (!input.ids.length) return { success: false, error: 'No thread IDs' };
-      await Promise.all(
-        input.ids.map((threadId) =>
-          modifyThreadLabelsInDB(activeConnection.id, threadId, ['INBOX'], ['SNOOZED']),
-        ),
-      );
+      await applyThreadLabels(activeConnection.id, input.ids, ['INBOX'], ['SNOOZED']);
       await snoozeStore.delete(activeConnection.id, input.ids);
       return { success: true };
     }),

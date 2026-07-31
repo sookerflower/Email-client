@@ -40,16 +40,34 @@ export const getThread = async (
   return { result };
 };
 
-export const modifyThreadLabelsInDB = async (
+/**
+ * Apply label changes to threads, WRITE-THROUGH to IMAP.
+ *
+ * Replaces the old `modifyThreadLabelsInDB`, which was deliberately DELETED
+ * rather than aliased: it wrote to Postgres only, so every user action --
+ * star, read/unread, archive, bin, spam, labels -- produced index state the
+ * IMAP server had never heard of. That state reverted on any forced resync
+ * and was destroyed outright by a DB wipe. Leaving an alias behind would let
+ * a call site quietly keep using it.
+ *
+ * Takes an ARRAY of thread ids on purpose: the driver batches a single IMAP
+ * round trip per operation, so callers should hand it the whole set rather
+ * than mapping one call per thread.
+ *
+ * Throws on IMAP failure. That is the point -- the client's optimistic update
+ * needs a real error to roll back from.
+ */
+export const applyThreadLabels = async (
   connectionId: string,
-  threadId: string,
+  threadIds: string[],
   addLabels: string[],
   removeLabels: string[],
 ) => {
   const { getMailEngine } = await import('./mail-engine');
   const engine = await getMailEngine(connectionId);
-  await engine.modifyThreadLabelsInDB(threadId, addLabels, removeLabels);
+  const result = await engine.applyLabels(threadIds, addLabels, removeLabels);
   await sendDoState(connectionId);
+  return result;
 };
 
 export const forceReSync = async (connectionId: string) => {

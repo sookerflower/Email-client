@@ -130,9 +130,7 @@ const markAsRead = (connectionId: string) =>
     }),
     execute: async ({ threadIds }) => {
       const { stub: agent } = await getZeroAgent(connectionId);
-      await Promise.all(
-        threadIds.map((threadId) => agent.modifyThreadLabelsInDB(threadId, [], ['UNREAD'])),
-      );
+      await agent.applyLabels(threadIds, [], ['UNREAD']);
       return { threadIds, success: true };
     },
   });
@@ -145,9 +143,7 @@ const markAsUnread = (connectionId: string) =>
     }),
     execute: async ({ threadIds }) => {
       const { stub: agent } = await getZeroAgent(connectionId);
-      await Promise.all(
-        threadIds.map((threadId) => agent.modifyThreadLabelsInDB(threadId, ['UNREAD'], [])),
-      );
+      await agent.applyLabels(threadIds, ['UNREAD'], []);
       return { threadIds, success: true };
     },
   });
@@ -170,11 +166,7 @@ const modifyLabels = (connectionId: string) =>
     }),
     execute: async ({ threadIds, options }) => {
       const { stub: agent } = await getZeroAgent(connectionId);
-      await Promise.all(
-        threadIds.map((threadId) =>
-          agent.modifyThreadLabelsInDB(threadId, options.addLabels, options.removeLabels),
-        ),
-      );
+      await agent.applyLabels(threadIds, options.addLabels, options.removeLabels);
       return { threadIds, options, success: true };
     },
   });
@@ -296,9 +288,7 @@ export const bulkDeleteExecute =
   (connectionId: string) =>
   async ({ threadIds }: { threadIds: string[] }) => {
     const { stub: agent } = await getZeroAgent(connectionId);
-    await Promise.all(
-      threadIds.map((threadId) => agent.modifyThreadLabelsInDB(threadId, ['TRASH'], [])),
-    );
+    await agent.applyLabels(threadIds, ['TRASH'], []);
     return { threadIds, success: true };
   };
 
@@ -310,9 +300,7 @@ const bulkArchive = (connectionId: string) =>
     }),
     execute: async ({ threadIds }) => {
       const { stub: agent } = await getZeroAgent(connectionId);
-      await Promise.all(
-        threadIds.map((threadId) => agent.modifyThreadLabelsInDB(threadId, [], ['INBOX'])),
-      );
+      await agent.applyLabels(threadIds, [], ['INBOX']);
       return { threadIds, success: true };
     },
   });

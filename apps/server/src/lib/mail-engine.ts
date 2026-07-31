@@ -451,7 +451,21 @@ export class MailEngine {
     return { success: true as const };
   }
 
-  async modifyThreadLabelsInDB(threadId: string, addLabels: string[], removeLabels: string[]) {
+  /**
+   * INDEX-ONLY label write. SYNC-SIDE USE ONLY.
+   *
+   * Legitimate when the change ALREADY HAPPENED on the server and the index
+   * is catching up -- e.g. a thread vanished from a folder during an
+   * incremental sync and we drop that folder's label. Writing back to IMAP
+   * there would be wrong (and circular).
+   *
+   * NEVER call this for a user action. It is the old `modifyThreadLabelsInDB`,
+   * renamed so the sync-only contract is unmissable: as a general-purpose
+   * mutation path it produced index state the server had never heard of,
+   * which reverted on forced resync and died with a DB wipe. User actions go
+   * through `applyLabels` (write-through).
+   */
+  async applyIndexLabelsFromSync(threadId: string, addLabels: string[], removeLabels: string[]) {
     const currentLabelsData = await getThreadLabels(this.connectionId, threadId);
     const currentLabels = currentLabelsData.map((l) => l.id);
 
@@ -487,7 +501,12 @@ export class MailEngine {
         })
         .filter((id): id is string => !!id);
 
-    return await this.modifyThreadLabelsInDB(threadId, resolve(addLabelNames), resolve(removeLabelNames));
+    // Write-through: this is a user-facing path, not a sync-side one.
+    return await this.applyLabels(
+      [threadId],
+      resolve(addLabelNames),
+      resolve(removeLabelNames),
+    );
   }
 
   async storeThreadInDB(
@@ -932,7 +951,8 @@ export class MailEngine {
           (id) => id === 'TRASH' || id === 'BIN' || id === 'SPAM',
         );
         if (outOfSearch.length) {
-          await this.modifyThreadLabelsInDB(threadId, [], [folderLabel]);
+          // Index-only on purpose: the server already moved this message.
+          await this.applyIndexLabelsFromSync(threadId, [], [folderLabel]);
           this.broadcast({ type: OutgoingMessageType.Mail_Get, threadId });
           return { success: true };
         }

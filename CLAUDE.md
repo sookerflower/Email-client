@@ -231,10 +231,20 @@ supplies the client's `VITE_PUBLIC_BACKEND_URL`. Worker-critical keys:
   (GreenMail) and `--real` (m.re.cx; it ban-probes first). All legs must be
   green after every change. Regression test:
   `npx vitest run --config vitest.integration.config.ts`.
-- tsc baselines (must not increase): **server 7, mail 231** (re-baselined at
-  6.4 close after the CF types left the tree; `npx tsc --noEmit`, count
-  `error TS` lines; both apps have pre-existing upstream errors — judge by
-  delta).
+- tsc baselines (must not increase): **server 7, mail 36**. Both apps have
+  pre-existing upstream errors — judge by delta, not by zero.
+  ```bash
+  cd apps/server && npx tsc --noEmit                       # expect 7
+  cd apps/mail && rm -f tsconfig.tsbuildinfo && \
+    pnpm tsc --project tsconfig.json --noEmit              # expect 36
+  ```
+  **Delete `tsconfig.tsbuildinfo` first for the mail app** or tsc runs
+  incrementally and reports only re-checked files (36 became a misleading
+  "36" that happened to match, and an earlier incremental run showed a
+  different subset). Count with `| grep -c "error TS"`.
+  Mail was documented as 231 through 2026-07-31; the real number moved to 36
+  during the search work (last apps/mail commit 3802a845) and the doc was
+  simply stale. Re-verified non-incrementally at that date.
 - E2E realtime/chat: `node scripts/e2e-realtime.mjs` (and `--real`) —
   same green/red standard as e2e-mail.mjs.
 - The standard is Node build + boot + both suites green (wrangler dry-run
@@ -258,6 +268,18 @@ supplies the client's `VITE_PUBLIC_BACKEND_URL`. Worker-critical keys:
 - Work sub-step by sub-step; **report after each sub-step and hold** for go.
 - Run the E2E script after each step, not just at the end.
 - Assert on specifics (label membership, message arrival), never bare counts.
+- **Assert what the code controls (ordering, precision at a fixed page size),
+  not what the mailbox happens to contain.** Set-equality against a live
+  mailbox produced two false reds in one session: a broad filter's page
+  membership depends on how many messages the mailbox holds, which the code
+  does not decide. Pin `maxResults` and assert ordering/precision there;
+  assert recall separately and do not claim anything about extras.
+- A test that passes against the broken code is worse than no test. Prove a
+  new regression leg goes RED on the pre-fix build before trusting it — two
+  legs this session (`list-sort`, the first ordering guard) passed against
+  the very defect they were written for, one because the fixture happened to
+  give the correct answer the lowest UID, one because its page size never
+  triggered the slice.
 - Commit + push on `path-b-migration` at each phase close.
 - Memory files in `C:\Users\Abishek\.claude\projects\D--email-client\memory\`
   hold deployment/server details (fail2ban history, endpoints) — the

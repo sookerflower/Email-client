@@ -6,6 +6,7 @@ import {
 } from './imap-threading';
 import type {
   IGetThreadResponse,
+  ListParams,
   MailManager,
   ManagerConfig,
   ImapSmtpAuthConfig,
@@ -19,6 +20,7 @@ import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
 import { parseSearch } from '../search-parser';
 import { compileSearch } from '../search-compiler';
+import { intersectThreadIdsByLabel } from '../mail-index';
 import { redis } from '../services';
 import crypto from 'crypto';
 
@@ -575,15 +577,8 @@ export class ImapSmtpMailManager implements MailManager {
     );
   }
 
-  public list(params: {
-    folder: string;
-    query?: string;
-    maxResults?: number;
-    labelIds?: string[];
-    pageToken?: string | number;
-    intersectFn?: (threadIds: string[], labelIds: string[]) => Promise<string[]>;
-  }) {
-    const { folder, query, maxResults = 50, pageToken, labelIds = [], intersectFn } = params;
+  public list(params: ListParams) {
+    const { folder, query, maxResults = 50, pageToken, labelIds = [] } = params;
     return this.withErrorHandler(
       'list',
       async () => {
@@ -714,6 +709,9 @@ export class ImapSmtpMailManager implements MailManager {
           
           const pendingMetas: MessageMeta[] = [];
 
+          const newestOf = (g: { messages: MessageMeta[] }) =>
+            Math.max(...g.messages.map((m) => m.date.getTime()));
+
           while (foundThreads.length < maxResults && currentOffset < sortedItems.length && uidsScanned < MAX_UIDS_SCANNED) {
             const batchSize = 500;
             const batch = sortedItems.slice(currentOffset, currentOffset + batchSize);
@@ -729,6 +727,15 @@ export class ImapSmtpMailManager implements MailManager {
               arr.push(item.uid);
               byFolder.set(item.folder, arr);
             }
+            // ORDERING HAZARD -- read before touching anything downstream.
+            // IMAP returns FETCH results in UID-ASCENDING order regardless of
+            // the order the UIDs are listed here. `sortedItems` is globally
+            // newest-first (sorted by internalDate above), but the metas that
+            // come back from this fetch are effectively OLDEST-first within
+            // each batch. Anything that slices `groupIntoThreads(...)` output
+            // must therefore sort newest-first FIRST, or it returns the oldest
+            // N of the scanned window. That was the root cause of searches
+            // looking empty for recent mail at the default page size.
             for (const [f, uids] of byFolder.entries()) {
               try {
                   const mb = await client.mailboxOpen(f);
@@ -743,6 +750,11 @@ export class ImapSmtpMailManager implements MailManager {
             if (combinedLabelIds.length === 0) {
                const allGroups = groupIntoThreads(pendingMetas);
                if (allGroups.length >= maxResults) {
+                 // Sort before slicing (see ORDERING HAZARD above). Sorting the
+                 // ACCUMULATED groups and then slicing is correct: sortedItems is
+                 // globally newest-first and batches are consumed in that order,
+                 // so every later batch is strictly older than what we already hold.
+                 allGroups.sort((a, b) => newestOf(b) - newestOf(a));
                  foundThreads = allGroups.slice(0, maxResults).map(g => encodeThreadId(g.rootId));
                  break;
                }
@@ -750,12 +762,30 @@ export class ImapSmtpMailManager implements MailManager {
             } else {
               const batchGroups = groupIntoThreads(batchMetas);
               const batchThreadIds = batchGroups.map(g => encodeThreadId(g.rootId));
-  
-              let passed = batchThreadIds;
-              if (intersectFn) {
-                 passed = await intersectFn(batchThreadIds, combinedLabelIds);
+
+              // Label filtering runs HERE, inside the batch loop, and worker-side.
+              // It cannot be done by the caller after list() returns: filtering a
+              // finished page would under-fill it with no way to fetch more.
+              //
+              // FAIL CLOSED. This previously defaulted to `passed = batchThreadIds`
+              // and only narrowed `if (intersectFn)` -- an injected callback that
+              // JSON.stringify silently dropped at the api->worker RPC boundary, so
+              // in practice it was never present and `label:` matched EVERY thread.
+              // If the intersection cannot run we must return nothing, never
+              // everything.
+              const connectionId = this.config.auth.connectionId;
+              if (!connectionId) {
+                throw new Error(
+                  'connectionId required to apply label filters; refusing to return unfiltered results',
+                );
               }
-              
+              const passed = await intersectThreadIdsByLabel(
+                connectionId,
+                batchThreadIds,
+                combinedLabelIds,
+              );
+
+
               for (const tid of passed) {
                 if (!foundThreads.includes(tid)) {
                   foundThreads.push(tid);
@@ -772,13 +802,13 @@ export class ImapSmtpMailManager implements MailManager {
             nextPageToken = `${searchHash}:${currentOffset}`;
           }
 
+          // Sort BEFORE slicing (see ORDERING HAZARD above). This previously
+          // sliced first and sorted the survivors, which returned the oldest
+          // maxResults of the window and then merely ordered those correctly.
           const finalGroups = groupIntoThreads(pendingMetas)
              .filter(g => foundThreads.includes(encodeThreadId(g.rootId)))
+             .sort((a, b) => newestOf(b) - newestOf(a))
              .slice(0, maxResults);
-             
-          const newestOf = (g: { messages: MessageMeta[] }) =>
-            Math.max(...g.messages.map((m) => m.date.getTime()));
-          finalGroups.sort((a, b) => newestOf(b) - newestOf(a));
 
           return {
             threads: finalGroups.map((g) => {

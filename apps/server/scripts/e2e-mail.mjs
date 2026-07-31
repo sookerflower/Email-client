@@ -1159,6 +1159,62 @@ await leg('list-sort', async () => {
   return `search returns newer thread first despite lower UID`;
 });
 
+await leg('list-sort-page-slice', async () => {
+  // Regression guard for the break-then-slice ordering bug.
+  //
+  // The list-sort leg above cannot catch it: it gives the NEWER message the
+  // LOWER UID, and IMAP returns FETCH results UID-ascending, so the correct
+  // answer sits first by accident even when the code slices before sorting.
+  // Here the newer message gets the HIGHER UID, so a slice-before-sort
+  // returns the OLDER one. maxResults:1 forces the early-break path
+  // (allGroups.length >= maxResults) that does the slicing.
+  const subOlder = `slice older ${runId}`;
+  const subNewer = `slice newer ${runId}`;
+  const marker = `slice marker ${runId}`;
+
+  const client = await rawImap();
+  try {
+    // older first => LOWER uid
+    const olderRaw = `Date: Tue, 01 Jan 2030 09:00:00 +0000\r\nSubject: ${subOlder}\r\nFrom: e2e@test\r\n\r\n${marker}`;
+    await client.append('INBOX', olderRaw, ['\\Seen']);
+    // newer second => HIGHER uid
+    const newerRaw = `Date: Tue, 01 Jan 2030 09:30:00 +0000\r\nSubject: ${subNewer}\r\nFrom: e2e@test\r\n\r\n${marker}`;
+    await client.append('INBOX', newerRaw, ['\\Seen']);
+  } finally {
+    await client.logout();
+  }
+
+  const result = await trpc('connections.list', { query: null });
+  const all = result?.connections ?? [];
+  const connectionId = (all.find((c) => c.email === mode.email) ?? all[0])?.id;
+  await enqueueInboxSync(connectionId);
+
+  const windowMs = REAL ? 120_000 : 90_000;
+  const deadline = Date.now() + windowMs;
+  while (!((await subjectInInbox(subOlder, 25)) && (await subjectInInbox(subNewer, 25)))) {
+    if (Date.now() > deadline) throw new Error('slice-order messages never synced');
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+
+  const searchResult = await trpc('mail.listThreads', {
+    query: { folder: 'inbox', q: marker, maxResults: 1 },
+  });
+  const threads = searchResult.threads ?? [];
+  if (threads.length !== 1) {
+    throw new Error(`Expected exactly 1 thread at maxResults:1, got ${threads.length}`);
+  }
+
+  const firstThread = await trpc('mail.get', { query: { id: threads[0].id } });
+  if (firstThread?.latest?.subject !== subNewer) {
+    throw new Error(
+      `Page slice took the wrong end: got "${firstThread?.latest?.subject}", expected "${subNewer}". ` +
+        `The capped page returned the OLDER message, i.e. groups were sliced before being sorted newest-first.`,
+    );
+  }
+
+  return `capped page returns newest despite higher UID`;
+});
+
 await leg('derived-vs-stored-threadId', async () => {
   // Append two messages without Message-ID headers to verify synthetic fallback threadIDs
   // round-trip stably through search -> get.

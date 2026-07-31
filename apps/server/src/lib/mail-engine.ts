@@ -22,7 +22,6 @@ import {
   applyFolderLedgerDelta,
   clearFolderLedger,
   clearFolderSyncData,
-  intersectThreadIdsByLabel,
   type IndexLabel,
 } from './mail-index';
 import { generateWhatUserCaresAbout, type UserTopic } from './analyze/interests';
@@ -144,12 +143,10 @@ export class MailEngine {
     labelIds?: string[];
     pageToken?: string;
   }): Promise<IGetThreadsResponse> {
-    return await this.driver.list({
-      ...params,
-      intersectFn: async (threadIds: string[], labelIds: string[]) => {
-        return await intersectThreadIdsByLabel(this.connectionId, threadIds, labelIds);
-      }
-    });
+    // Label intersection is applied by the driver itself, inside its batch
+    // loop. It used to be injected here as a callback, which JSON.stringify
+    // dropped at the RPC boundary -- see the note in driver/types.ts.
+    return await this.driver.list(params);
   }
 
   async modifyLabels(threadIds: string[], addLabelIds: string[], removeLabelIds: string[]) {

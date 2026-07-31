@@ -124,6 +124,26 @@ export interface FolderDelta {
   newCursor: FolderDeltaCursor;
 }
 
+/**
+ * Parameters for MailManager.list.
+ *
+ * Every property here crosses the api -> worker JSON RPC boundary
+ * (imap-proxy.rpc -> worker /rpc), so ONLY JSON-serializable data may be
+ * added. A function-valued param is silently dropped by JSON.stringify and
+ * arrives as `undefined` on the worker -- that is exactly how the `label:`
+ * filter came to match every thread.
+ *
+ * Declared once and shared by the contract, the real driver and the proxy, so
+ * a param added to one cannot silently go missing from another.
+ */
+export interface ListParams {
+  folder: string;
+  query?: string;
+  maxResults?: number;
+  labelIds?: string[];
+  pageToken?: string | number;
+}
+
 export interface MailManager {
   config: ManagerConfig;
   getFolderState?(folder: string): Promise<FolderState | null>;
@@ -155,14 +175,7 @@ export interface MailManager {
   }>;
   delete(id: string): Promise<void>;
   deleteDraft(id: string): Promise<void>;
-  list(params: {
-    folder: string;
-    query?: string;
-    maxResults?: number;
-    labelIds?: string[];
-    pageToken?: string | number;
-    intersectFn?: (threadIds: string[], labelIds: string[]) => Promise<string[]>;
-  }): Promise<{
+  list(params: ListParams): Promise<{
     threads: { id: string; historyId: string | null; $raw?: unknown }[];
     nextPageToken: string | null;
     incomplete?: boolean;

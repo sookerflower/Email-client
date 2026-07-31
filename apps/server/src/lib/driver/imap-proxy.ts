@@ -3,6 +3,7 @@ import type {
   FolderDeltaCursor,
   FolderState,
   IGetThreadResponse,
+  ListParams,
   MailManager,
   ManagerConfig,
   ParsedDraft,
@@ -157,13 +158,7 @@ export class ImapSmtpProxyMailManager implements MailManager {
     return this.rpc('deleteDraft', [id]);
   }
 
-  list(params: {
-    folder: string;
-    query?: string;
-    maxResults?: number;
-    labelIds?: string[];
-    pageToken?: string | number;
-  }): Promise<{
+  list(params: ListParams): Promise<{
     threads: { id: string; historyId: string | null; $raw?: unknown }[];
     nextPageToken: string | null;
   }> {

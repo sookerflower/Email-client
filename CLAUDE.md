@@ -152,6 +152,55 @@ with the incidents and verification numbers. Read it before doing anything.
   - **6.5 (planned)**: fresh-mailbox resync drill — wipe Postgres index/blobs,
     boot worker+api from nothing, full resync from m.re.cx, both suites
     green, timings recorded. Live proof of "no data migration needed."
+  - **OPEN: `idle-push` fails on `--real` — the mail server does not notify
+    IDLE listeners for SMTP-delivered mail.** Measured 2026-07-31, and this
+    is NOT the VPN and NOT connection age (both were wrong first guesses):
+      - IMAP `APPEND` from a second session, watcher connected seconds
+        earlier → notify + sync in **3.8s**.
+      - IMAP `APPEND` from a second session, watcher idling for many minutes
+        → notify + sync in **2.1s**.
+      - **SMTP delivery to the same mailbox → no notify within 240s, twice.**
+        The messages WERE delivered (verified uids 302 and 319 present in
+        INBOX), so this is delivery-without-notification, not a lost mail.
+    The split is by DELIVERY PATH, not by connection health: IMAP APPEND
+    signals waiting IDLE clients, the MDA path does not. That points at the
+    mail server's LMTP/LDA notify configuration (Dovecot needs the mailbox
+    notification plugin active on the delivery path), not at our watcher —
+    `src/worker/` is untouched by the 2026-07-31 search work.
+    Consequence for the classroom: **push will not fire for incoming mail on
+    this server.** It self-heals via the next scheduled sync, so it degrades
+    to DELAYED mail rather than lost mail, but "instant" it is not until the
+    server is fixed. Verify with the APPEND-vs-SMTP pair above before
+    touching any code in `src/worker/`.
+  - **OPS PREREQUISITE (not hygiene): the fail2ban allowlist for the deploy
+    IP.** The machine's real IP (`103.126.42.2` per the memory notes —
+    RE-CONFIRM, it may be dynamic) is banned by the mail server, so `--real`
+    can only run over a VPN. That makes the VPN load-bearing for the entire
+    regression suite: if it drops mid-run the worker resumes hammering the
+    banned address. Separately, 5 watcher restarts were observed in one
+    session over the VPN — real churn, though NOT the cause of the
+    `idle-push` failure above.
+    What it needs, all root on the mail server:
+      - `ignoreip` in `/etc/fail2ban/jail.local` under `[DEFAULT]` for the
+        deploy egress IP, applied to the `dovecot` and `postfix-sasl` jails;
+      - check the ban ACTION too — the observed block hit every port
+        including 80/443, so it is all-ports (`iptables-allports` or
+        equivalent) and a per-service allowlist alone may not clear it;
+      - `fail2ban-client set <jail> unbanip <ip>` to clear the current ban.
+      - If the deploy IP is dynamic, an allowlist is the wrong instrument —
+        that needs a static egress or a per-account exemption.
+  - **Worker has no backoff against a dead endpoint** — 25 consecutive
+    retries against a black-holed host in one session. Connection discipline
+    asserts socket COUNT, not retry behaviour against an unreachable peer.
+    This is what re-triggers the ban.
+  - **Classroom rollout note (not a change now): the 29-minute IDLE refresh
+    can outlive a home router's NAT timeout.** Students on domestic
+    connections may see watcher restarts for this reason. It self-heals — the
+    next sync catches anything missed — so it degrades to DELAYED push, not
+    lost mail. If push latency matters for the demo, a shorter refresh
+    interval is the lever. Note this is a SEPARATE concern from the
+    `idle-push` failure above, which is server-side notification and would
+    not be fixed by a shorter refresh.
   - **Cutover-readiness realities carried forward, NOT Phase 6 code tasks**:
     the ws.re.cx LLM proxy buffers SSE (chat arrives as one burst regardless
     of our streaming — proven ours delivers progressively; fix is proxy

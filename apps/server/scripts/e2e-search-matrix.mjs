@@ -948,8 +948,26 @@ await hardLeg('cleanup', async () => {
       /* index cleanup is best-effort */
     }
   }
+
+  // Delete the LABEL too, not just the messages. apply_label creates a real
+  // label through labels.create, which mints a real IMAP keyword and writes
+  // the registry. Deleting only the fixture messages leaves a matrix<runId>
+  // label behind on EVERY run -- on --real that is the user's actual account,
+  // accumulating one dead label per run in both the registry and the server's
+  // permanent flags.
+  let labelNote = 'no label to remove';
+  if (resolvedLabelId) {
+    try {
+      await trpc('labels.delete', { mutationBody: { id: resolvedLabelId } });
+      labelNote = `removed label ${resolvedLabelId}`;
+    } catch (error) {
+      labelNote = `LABEL CLEANUP FAILED for ${resolvedLabelId}: ${error.message}`;
+      console.error(`[e2e] ${labelNote}`);
+    }
+  }
+
   await imap.logout();
-  return `removed ${appendedUids.length} fixture messages`;
+  return `removed ${appendedUids.length} fixture messages; ${labelNote}`;
 });
 
 // ---------------------------------------------------------------------- report

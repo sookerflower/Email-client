@@ -152,26 +152,28 @@ with the incidents and verification numbers. Read it before doing anything.
   - **6.5 (planned)**: fresh-mailbox resync drill — wipe Postgres index/blobs,
     boot worker+api from nothing, full resync from m.re.cx, both suites
     green, timings recorded. Live proof of "no data migration needed."
-  - **OPEN: `idle-push` fails on `--real` — the mail server does not notify
-    IDLE listeners for SMTP-delivered mail.** Measured 2026-07-31, and this
-    is NOT the VPN and NOT connection age (both were wrong first guesses):
-      - IMAP `APPEND` from a second session, watcher connected seconds
-        earlier → notify + sync in **3.8s**.
-      - IMAP `APPEND` from a second session, watcher idling for many minutes
-        → notify + sync in **2.1s**.
-      - **SMTP delivery to the same mailbox → no notify within 240s, twice.**
-        The messages WERE delivered (verified uids 302 and 319 present in
-        INBOX), so this is delivery-without-notification, not a lost mail.
-    The split is by DELIVERY PATH, not by connection health: IMAP APPEND
-    signals waiting IDLE clients, the MDA path does not. That points at the
-    mail server's LMTP/LDA notify configuration (Dovecot needs the mailbox
-    notification plugin active on the delivery path), not at our watcher —
-    `src/worker/` is untouched by the 2026-07-31 search work.
-    Consequence for the classroom: **push will not fire for incoming mail on
-    this server.** It self-heals via the next scheduled sync, so it degrades
-    to DELAYED mail rather than lost mail, but "instant" it is not until the
-    server is fixed. Verify with the APPEND-vs-SMTP pair above before
-    touching any code in `src/worker/`.
+  - **RESOLVED 2026-07-31 — `idle-push` on `--real`. There was never anything
+    wrong with the server or the watcher.** Recorded because four wrong
+    diagnoses were written down before the right one, and two of them nearly
+    became work items:
+      1. "VPN NAT timeout kills the IDLE connection" — wrong.
+      2. "Aged IDLE connections stop receiving" — wrong; an APPEND to a
+         watcher idling for many minutes notified in 2.1s.
+      3. "The mail server does not notify IDLE listeners for SMTP-delivered
+         mail; needs LMTP/LDA notify config" — wrong, and this one would have
+         sent someone to audit `mailbox_transport` / `mail_plugins` on a
+         correctly-configured server. A controlled SMTP send notified
+         immediately.
+      4. Actual cause: `list-sort` and `derived-vs-stored-threadId` dated
+         their fixtures **2030-01-01**, and cleanup was skipped whenever any
+         leg failed. Survivors permanently occupied the top 8 of every
+         newest-first list; `subjectInInbox` scans only the first 8; so the
+         new message arrived (3-4s, verified by INTERNALDATE), synced, and
+         sat at position 9 — invisible to the assertion. Self-reinforcing:
+         each failure skipped cleanup and poisoned the next run.
+    Fixed in the harness: fixtures are past-dated (`hoursAgoHeader`), cleanup
+    runs via `{always: true}`, cleanup pages 100 not 20, and a
+    `preflight-clean-mailbox` leg aborts loudly if any fixture survives.
   - **OPS PREREQUISITE (not hygiene): the fail2ban allowlist for the deploy
     IP.** The machine's real IP (`103.126.42.2` per the memory notes —
     RE-CONFIRM, it may be dynamic) is banned by the mail server, so `--real`
@@ -323,6 +325,14 @@ supplies the client's `VITE_PUBLIC_BACKEND_URL`. Worker-critical keys:
   membership depends on how many messages the mailbox holds, which the code
   does not decide. Pin `maxResults` and assert ordering/precision there;
   assert recall separately and do not claim anything about extras.
+- **Read the assertion before theorising about the mechanism. A leg that
+  fails is telling you what it CHECKED failed, not what you assume it
+  tests.** `idle-push` produced four wrong diagnoses (VPN, connection age,
+  server notify config, twice nearly written up as ops work) because every
+  one of them explained why *push* might fail — while the leg never asserted
+  push. It asserted "appears in the first 8 threads of the inbox list", and
+  the message was at position 9 behind future-dated junk. Push was working
+  the whole time.
 - A test that passes against the broken code is worse than no test. Prove a
   new regression leg goes RED on the pre-fix build before trusting it — two
   legs this session (`list-sort`, the first ordering guard) passed against

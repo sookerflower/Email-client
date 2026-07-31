@@ -109,11 +109,53 @@ if (!mode.email || !mode.password) {
 let cookie = '';
 const runId = Math.random().toString(36).slice(2, 10);
 
+/**
+ * Date header for an ordering fixture, N hours in the PAST.
+ *
+ * These used to be dated 2030-01-01. Nothing needed a future date -- the
+ * ordering legs care about relative age vs APPEND order (which controls UID),
+ * not absolute time. But a future date permanently pins the message to the
+ * top of every newest-first list, so any fixture that escaped cleanup sat
+ * above real mail forever and pushed genuinely new messages out of the
+ * windows other legs scan. That is exactly how idle-push failed for four
+ * consecutive --real runs. Past dates make a stranded fixture harmless.
+ */
+const hoursAgoHeader = (h) => new Date(Date.now() - h * 3_600_000).toUTCString();
+
+/**
+ * Subject prefixes for every fixture this suite appends. Used by the
+ * preflight guard; keep in sync when adding a leg that appends mail.
+ */
+const FIXTURE_PREFIXES = [
+  'sort newer',
+  'sort older',
+  'slice newer',
+  'slice older',
+  'derived no-id',
+  'e2e idle',
+  'e2e send',
+  'e2e scheduled',
+];
+
 const legs = [];
 let failed = false;
 
-const leg = async (name, fn) => {
-  if (failed) return;
+/**
+ * `always: true` runs the leg even after an earlier failure.
+ *
+ * Cleanup MUST be `always`. It used to be skipped by the `failed`
+ * short-circuit, which created a self-reinforcing loop on --real: a failed
+ * leg skipped cleanup, so that run's fixtures survived; those fixtures were
+ * dated 2030-01-01 at the time, so the survivors permanently pinned the top
+ * of the inbox; subjectInInbox scans only a window of the newest threads, so
+ * the NEXT run's idle-push could not see its own message and failed,
+ * skipping cleanup again. Ten zombie fixtures from four runs had accumulated
+ * before this was found. Fixtures are past-dated now (hoursAgoHeader), which
+ * removes the pinning, and the preflight guard catches survivors -- but
+ * `always` is what stops the loop starting.
+ */
+const leg = async (name, fn, { always = false } = {}) => {
+  if (failed && !always) return;
   const started = Date.now();
   try {
     const detail = await fn();
@@ -159,7 +201,27 @@ const trpc = async (path, { query, mutationBody } = {}) => {
 
 const listInbox = () => trpc('mail.listThreads', { query: { folder: 'inbox', maxResults: 50 } });
 
-/** True if a thread whose latest subject matches is within the first `depth` inbox threads. */
+/**
+ * True if a thread whose latest subject matches is within the first `depth`
+ * inbox threads.
+ *
+ * WHY A WINDOW AND NOT A SEARCH: this asserts what the user actually sees --
+ * the message appearing near the top of the inbox VIEW, unaided, ordered
+ * newest-first. Switching to `q:` would route through the driver's IMAP
+ * SEARCH instead of the indexed inbox listing, i.e. it would test a different
+ * subsystem and would still pass if the inbox view were broken.
+ *
+ * WHY 8: with correct newest-first ordering a just-arrived message lands at
+ * position 0-2; 8 is headroom for concurrent arrivals, not a tuning knob.
+ *
+ * WHAT POISONS IT: anything that outranks fresh mail in the newest-first
+ * order. Future-dated fixtures did exactly that -- eight of them sat above
+ * real mail permanently and pushed new arrivals past the window, which is how
+ * idle-push failed for four consecutive --real runs while push worked fine.
+ * Fixtures are past-dated now and preflight-clean-mailbox aborts on
+ * survivors; if this window ever starts failing again, check for high-ranking
+ * junk in the inbox BEFORE suspecting sync or push.
+ */
 const subjectInInbox = async (subject, depth = 8) => {
   for (const t of (await listInbox()).threads.slice(0, depth)) {
     const thread = await trpc('mail.get', { query: { id: t.id } });
@@ -207,6 +269,59 @@ await leg('login', async () => {
     .join('; ');
   if (!cookie) throw new Error('no session cookie returned');
   return body.user.email;
+});
+
+// Preflight: refuse to run on a mailbox still holding fixtures from a previous
+// run. Leftovers are not cosmetic -- they used to compound silently (see the
+// leg() note) and it took four failed --real runs to notice. Aborting loudly
+// on the FIRST occurrence turns that into an obvious problem with an obvious
+// remedy. Cheap enough to always run; only meaningful against a real mailbox
+// where state persists between runs.
+await leg('preflight-clean-mailbox', async () => {
+  const { ImapFlow } = await import('imapflow');
+  const client = new ImapFlow(
+    REAL
+      ? {
+          host: devVars.IMAP_DEFAULT_IMAP_HOST,
+          port: Number(devVars.IMAP_DEFAULT_IMAP_PORT || 993),
+          secure: true,
+          auth: { user: devVars.TEST_IMAP_USER, pass: devVars.TEST_IMAP_PASSWORD },
+          tls: { rejectUnauthorized: false },
+          logger: false,
+        }
+      : {
+          host: '127.0.0.1',
+          port: 3143,
+          secure: false,
+          auth: { user: mode.email, pass: mode.password },
+          logger: false,
+        },
+  );
+  client.on('error', () => {});
+  await client.connect();
+  const found = [];
+  const lock = await client.getMailboxLock('INBOX');
+  try {
+    for (const prefix of FIXTURE_PREFIXES) {
+      const uids = (await client.search({ header: { subject: prefix } }, { uid: true })) || [];
+      for (const u of uids) found.push({ uid: u, prefix });
+    }
+  } finally {
+    lock.release();
+  }
+  await client.logout();
+
+  if (found.length > 0) {
+    const uids = found.map((f) => f.uid);
+    throw new Error(
+      `${found.length} fixture message(s) from a previous run are still in INBOX ` +
+        `(uids ${uids.join(',')}). They distort every ordering and window assertion ` +
+        `in this suite. Remove them before re-running, e.g.:\n` +
+        `    node -e "…imapflow… messageDelete('${uids.join(',')}', {uid:true})"\n` +
+        `  or delete by subject prefix: ${[...new Set(found.map((f) => f.prefix))].join(', ')}`,
+    );
+  }
+  return 'no fixtures left over from previous runs';
 });
 
 const sentSubject = `e2e send ${runId}`;
@@ -904,7 +1019,9 @@ if (REAL) {
     let deleted = 0;
     try {
       for (const folder of ['inbox', 'sent']) {
-        const listing = await rpc('list', [{ folder, maxResults: 20 }]);
+        // 20 was too small once a run leaves more than a page of fixtures
+        // behind: the tail survived cleanup and accumulated.
+        const listing = await rpc('list', [{ folder, maxResults: 100 }]);
         for (const t of listing.threads ?? []) {
           if ((t.$raw?.subject ?? '').includes(runId)) {
             try {
@@ -922,7 +1039,7 @@ if (REAL) {
       return `cleanup skipped (best-effort): ${error.message}`;
     }
     return `${deleted} thread(s) of run ${runId} hard-deleted from the real server`;
-  });
+  }, { always: true });
 }
 
 if (!REAL) {
@@ -1123,9 +1240,9 @@ await leg('list-sort', async () => {
   
   const client = await rawImap();
   try {
-    const newerRaw = `Date: Tue, 01 Jan 2030 10:05:00 +0000\r\nSubject: ${subNewer}\r\nFrom: e2e@test\r\n\r\n${marker}`;
+    const newerRaw = `Date: ${hoursAgoHeader(2)}\r\nSubject: ${subNewer}\r\nFrom: e2e@test\r\n\r\n${marker}`;
     await client.append('INBOX', newerRaw, ['\\Seen']);
-    const olderRaw = `Date: Tue, 01 Jan 2030 10:00:00 +0000\r\nSubject: ${subOlder}\r\nFrom: e2e@test\r\n\r\n${marker}`;
+    const olderRaw = `Date: ${hoursAgoHeader(3)}\r\nSubject: ${subOlder}\r\nFrom: e2e@test\r\n\r\n${marker}`;
     await client.append('INBOX', olderRaw, ['\\Seen']);
   } finally {
     await client.logout();
@@ -1175,10 +1292,10 @@ await leg('list-sort-page-slice', async () => {
   const client = await rawImap();
   try {
     // older first => LOWER uid
-    const olderRaw = `Date: Tue, 01 Jan 2030 09:00:00 +0000\r\nSubject: ${subOlder}\r\nFrom: e2e@test\r\n\r\n${marker}`;
+    const olderRaw = `Date: ${hoursAgoHeader(3)}\r\nSubject: ${subOlder}\r\nFrom: e2e@test\r\n\r\n${marker}`;
     await client.append('INBOX', olderRaw, ['\\Seen']);
     // newer second => HIGHER uid
-    const newerRaw = `Date: Tue, 01 Jan 2030 09:30:00 +0000\r\nSubject: ${subNewer}\r\nFrom: e2e@test\r\n\r\n${marker}`;
+    const newerRaw = `Date: ${hoursAgoHeader(2)}\r\nSubject: ${subNewer}\r\nFrom: e2e@test\r\n\r\n${marker}`;
     await client.append('INBOX', newerRaw, ['\\Seen']);
   } finally {
     await client.logout();
@@ -1224,9 +1341,9 @@ await leg('derived-vs-stored-threadId', async () => {
   
   const client = await rawImap();
   try {
-    const raw1 = `Date: Tue, 01 Jan 2030 11:00:00 +0000\r\nSubject: ${sub1}\r\nFrom: e2e@test\r\n\r\n${marker}`;
+    const raw1 = `Date: ${hoursAgoHeader(3)}\r\nSubject: ${sub1}\r\nFrom: e2e@test\r\n\r\n${marker}`;
     await client.append('INBOX', raw1, ['\\Seen']);
-    const raw2 = `Date: Tue, 01 Jan 2030 11:05:00 +0000\r\nSubject: ${sub2}\r\nFrom: e2e@test\r\n\r\n${marker}`;
+    const raw2 = `Date: ${hoursAgoHeader(2)}\r\nSubject: ${sub2}\r\nFrom: e2e@test\r\n\r\n${marker}`;
     await client.append('INBOX', raw2, ['\\Seen']);
   } finally {
     await client.logout();

@@ -3,9 +3,19 @@ import { compileSearch } from './search-compiler';
 import { parseSearch } from './search-parser';
 
 describe('search-compiler', () => {
-  it('from', () => expect(compileSearch({ op: 'from', value: 'a' }).imapCriteria).toEqual({ from: 'a' }));
-  it('to', () => expect(compileSearch({ op: 'to', value: 'a' }).imapCriteria).toEqual({ to: 'a' }));
-  it('cc', () => expect(compileSearch({ op: 'cc', value: 'a' }).imapCriteria).toEqual({ cc: 'a' }));
+  // from/to/cc compile to imapflow's HEADER form, not bare keys. These three
+  // expectations were written against an older compiler shape and had been
+  // failing since f63400c1. The header form is what ImapDriver.list actually
+  // sends and what the search control matrix verifies end to end on both
+  // GreenMail and Dovecot, so the test was stale, not the compiler.
+  it('from', () =>
+    expect(compileSearch({ op: 'from', value: 'a' }).imapCriteria).toEqual({
+      header: { from: 'a' },
+    }));
+  it('to', () =>
+    expect(compileSearch({ op: 'to', value: 'a' }).imapCriteria).toEqual({ header: { to: 'a' } }));
+  it('cc', () =>
+    expect(compileSearch({ op: 'cc', value: 'a' }).imapCriteria).toEqual({ header: { cc: 'a' } }));
   it('subject', () => expect(compileSearch({ op: 'subject', value: 'a' }).imapCriteria).toEqual({ subject: 'a' }));
   it('text', () => expect(compileSearch({ op: 'text', value: 'a' }).imapCriteria).toEqual({ text: 'a' }));
   

@@ -103,6 +103,28 @@ const plain = (from, subject, body, date, to) =>
   ].join('\r\n');
 
 const FIXTURES = [
+  // ORDER MATTERS. The two genuinely-old fixtures are appended FIRST so they
+  // get the LOWEST UIDs. IMAP returns FETCH results UID-ascending, so a page
+  // that slices before sorting newest-first will surface exactly these two --
+  // which is what the sliced-page ordering leg asserts against. Append them
+  // later and that leg passes even on the broken code, because the
+  // today-dated fixtures happen to hold the low UIDs.
+  {
+    key: 'mid_date',
+    sender: 'alice',
+    date: D_MID,
+    flags: [],
+    subject: S('MidDate'),
+    raw: (f) => plain(ALICE, f.subject, 'Ten days old', f.date),
+  },
+  {
+    key: 'old_date',
+    sender: 'alice',
+    date: D_OLD,
+    flags: [],
+    subject: S('OldDate'),
+    raw: (f) => plain(ALICE, f.subject, 'From the distant past', f.date),
+  },
   {
     key: 'alice_rabbit',
     sender: 'alice',
@@ -203,22 +225,6 @@ const FIXTURES = [
         `--mtx-alt--`,
         ``,
       ].join('\r\n'),
-  },
-  {
-    key: 'mid_date',
-    sender: 'alice',
-    date: D_MID,
-    flags: [],
-    subject: S('MidDate'),
-    raw: (f) => plain(ALICE, f.subject, 'Ten days old', f.date),
-  },
-  {
-    key: 'old_date',
-    sender: 'alice',
-    date: D_OLD,
-    flags: [],
-    subject: S('OldDate'),
-    raw: (f) => plain(ALICE, f.subject, 'From the distant past', f.date),
   },
   {
     // NOTE: no keyword stamped on APPEND. The label is created THROUGH THE
@@ -328,6 +334,38 @@ const rawImap = async () => {
 const matrix = [];
 let imap;
 let appendedUids = [];
+
+// Registered HERE, before anything is appended -- not next to the cleanup leg
+// at the bottom of the file. This script is top-level-await sequential, so
+// handlers declared after the legs do not exist yet while seeding is running,
+// which is exactly when a crash strands fixtures in a real mailbox.
+const emergencyCleanup = async (why) => {
+  try {
+    if (imap && appendedUids.length > 0) {
+      console.error(`[e2e] ${why} -- emergency cleanup of ${appendedUids.length} fixtures`);
+      const lock = await imap.getMailboxLock('INBOX');
+      try {
+        await imap.messageDelete(appendedUids.join(','), { uid: true });
+      } finally {
+        lock.release();
+      }
+      console.error('[e2e] emergency cleanup done');
+    } else {
+      console.error(`[e2e] ${why} -- nothing to clean up`);
+    }
+  } catch (e) {
+    console.error(`[e2e] EMERGENCY CLEANUP FAILED: ${e.message}`);
+    console.error(`[e2e] fixture UIDs still in the mailbox: ${appendedUids.join(',')}`);
+  }
+};
+process.on('uncaughtException', async (e) => {
+  await emergencyCleanup(`uncaught: ${e.message}`);
+  process.exit(3);
+});
+process.on('unhandledRejection', async (e) => {
+  await emergencyCleanup(`unhandled rejection: ${e?.message ?? e}`);
+  process.exit(3);
+});
 
 const record = (control, expected, actual, ok, detail = '') => {
   matrix.push({ control, expected, actual, verdict: ok ? 'PASS' : 'FAIL', detail });
@@ -503,6 +541,19 @@ if (ok) {
       await new Promise((r) => setTimeout(r, 3000));
     }
   });
+}
+
+// Fault injection, off unless asked for. The emergency-cleanup path is the
+// thing standing between a mid-run crash and fixture messages left in a REAL
+// inbox, so it needs to be provable on demand rather than trusted:
+//   E2E_FAULT=crash-after-seed node scripts/e2e-search-matrix.mjs --real
+// Expect: emergency cleanup log, exit 3, and an empty mailbox afterwards.
+if (ok && process.env.E2E_FAULT === 'crash-after-seed') {
+  console.error('[e2e] FAULT INJECTION: throwing after seed to exercise emergency cleanup');
+  setTimeout(() => {
+    throw new Error('injected fault: crash-after-seed');
+  }, 10);
+  await new Promise((r) => setTimeout(r, 60_000));
 }
 
 if (ok) {
@@ -761,11 +812,60 @@ if (ok) {
   // 14b. Same broad filter at the UI's DEFAULT page size. If this diverges
   // from the maxResults=200 run above, the operator is fine and the defect is
   // pagination/ordering in the result window the UI actually asks for.
+  // RECALL ONLY, deliberately not set-equality.
+  //
+  // This asserts that a broad filter at the UI's default page size surfaces
+  // recent mail at all -- the symptom that started this whole investigation
+  // (it returned nothing). Whether the page ALSO has room for the older
+  // fixtures depends on how many unread messages the mailbox happens to hold,
+  // which the code does not control: with a busy mailbox the 10-day and 2020
+  // fixtures fall outside the newest 20, with a quiet one they fit. Asserting
+  // an exact set here made the leg fail on a correct build purely because the
+  // mailbox had drained.
+  //
+  // Precision at a capped page is asserted by the slice-path leg above, which
+  // pins maxResults and is state-independent.
+  try {
+    const got = await fixtureKeysFor({ q: 'is:unread', maxResults: undefined });
+    const missing = TODAY_UNREAD_KEYS.filter((k) => !got.has(k));
+    record(
+      'is:unread at UI default page size (recall of newest)',
+      `contains all ${TODAY_UNREAD_KEYS.length} today-dated unread fixtures`,
+      missing.length === 0
+        ? `all ${TODAY_UNREAD_KEYS.length} present (${got.size} fixtures on page)`
+        : `missing ${fmt(missing)}`,
+      missing.length === 0,
+      missing.length === 0
+        ? ''
+        : 'A broad filter at the default page size must surface the newest matching mail. Missing recent mail means groups were sliced before being sorted newest-first.',
+    );
+  } catch (error) {
+    record(
+      'is:unread at UI default page size (recall of newest)',
+      `contains all ${TODAY_UNREAD_KEYS.length} today-dated unread fixtures`,
+      `ERROR: ${error.message}`,
+      false,
+    );
+  }
+
+  // THE regression guard for the slice-before-sort defect.
+  //
+  // A capped page must contain the NEWEST matches. maxResults is small enough
+  // that the fixture set (12) trips `allGroups.length >= maxResults` and takes
+  // the early-break slice -- the path that was broken. The two old fixtures
+  // hold the LOWEST UIDs (see the FIXTURES note), so slicing before sorting
+  // surfaces exactly them.
+  //
+  // The wider ordering check below does NOT catch this: at maxResults 200 the
+  // slice never runs, and it passed against the broken code.
+  // maxResults 10 of 12 fixtures is deterministic: the 10 newest are exactly
+  // the today-dated ones, with no reliance on how ties between the
+  // identically-timestamped today fixtures are broken.
   await assertControl(
-    'is:unread at UI default page size (no maxResults)',
-    { q: 'is:unread', maxResults: undefined },
-    TODAY_UNREAD_KEYS,
-    'Broad filter at the default page size must surface the NEWEST matching mail. Returning none (or only old mail) means groups were sliced before being sorted newest-first.',
+    'capped page returns the NEWEST matches (slice path)',
+    { q: runId, maxResults: 10 },
+    keysWhere((f) => f.date === D_TODAY),
+    'A capped page must hold the newest matches. Returning the 10-day-old or 2020 fixture (which hold the lowest UIDs) means groups were sliced before being sorted newest-first.',
   );
 
   // Ordering guard: the direct regression test for the slice-before-sort
@@ -833,33 +933,6 @@ if (ok) {
 }
 
 // ---------------------------------------------------------------------- clean
-// Cleanup must run even if the process is about to die, or fixtures are left
-// behind in a real mailbox. Belt and braces alongside the 'error' handler.
-const emergencyCleanup = async (why) => {
-  try {
-    if (imap && appendedUids.length > 0) {
-      console.error(`[e2e] ${why} -- emergency cleanup of ${appendedUids.length} fixtures`);
-      const lock = await imap.getMailboxLock('INBOX');
-      try {
-        await imap.messageDelete(appendedUids.join(','), { uid: true });
-      } finally {
-        lock.release();
-      }
-    }
-  } catch (e) {
-    console.error(`[e2e] EMERGENCY CLEANUP FAILED: ${e.message}`);
-    console.error(`[e2e] fixture UIDs still in the mailbox: ${appendedUids.join(',')}`);
-  }
-};
-process.on('uncaughtException', async (e) => {
-  await emergencyCleanup(`uncaught: ${e.message}`);
-  process.exit(3);
-});
-process.on('unhandledRejection', async (e) => {
-  await emergencyCleanup(`unhandled rejection: ${e?.message ?? e}`);
-  process.exit(3);
-});
-
 await hardLeg('cleanup', async () => {
   if (!imap) return 'nothing to clean';
   if (appendedUids.length > 0) {

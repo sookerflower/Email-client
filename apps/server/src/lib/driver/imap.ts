@@ -1360,7 +1360,12 @@ export class ImapSmtpMailManager implements MailManager {
           bcc: parsed.bcc ? addressList(parsed.bcc).map((a) => a.email) : undefined,
           subject: parsed.subject ?? '',
           content: html || parsed.text || '',
-          rawMessage: { internalDate: (parsed.date ?? new Date()).toISOString() },
+          // Gmail's contract for internalDate is epoch-milliseconds as a string,
+          // and the drafts UI parses it with Number(). An ISO string here reads
+          // back as NaN. formatDate now guards against that (returns ''), so it
+          // no longer crashes the route -- but the draft would show no date.
+          // Restored after being lost in the search-path rewrites.
+          rawMessage: { internalDate: String((parsed.date ?? new Date()).getTime()) },
         } satisfies ParsedDraft;
       },
       { id },

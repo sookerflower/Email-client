@@ -67,3 +67,10 @@ docker-data/
 .claude/
 .agents/
 apps/server/imap-sidecar/.label-store.json*
+
+# Scratch / throwaway probes. Keeps "commit everything" from sweeping in
+# experiments -- an orphaned scratch file (driver/test-list.ts) rode into
+# f63400c1 that way and raised the tsc floor from 7 to 8.
+scratch/
+**/scratch/
+

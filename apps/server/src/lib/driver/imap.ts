@@ -405,10 +405,17 @@ export class ImapSmtpMailManager implements MailManager {
         const client = await this.connect();
         const mailbox = await client.mailboxOpen(path);
 
+        const status = await client.status(path, {
+          uidValidity: true,
+          uidNext: true,
+          highestModseq: true,
+          messages: true,
+        });
+
         const newCursor = {
-          uidValidity: Number(mailbox.uidValidity),
-          uidNext: Number(mailbox.uidNext),
-          highestModseq: mailbox.highestModseq != null ? String(mailbox.highestModseq) : null,
+          uidValidity: Number(status.uidValidity),
+          uidNext: Number(status.uidNext),
+          highestModseq: status.highestModseq != null ? String(status.highestModseq) : null,
         };
         const fetchQuery = {
           envelope: true,
@@ -434,9 +441,9 @@ export class ImapSmtpMailManager implements MailManager {
         // Snapshot mode: ledger rebuild after a full sync.
         if (!cursor) {
           const metas: MessageMeta[] = [];
-          if (mailbox.exists > 0) {
-            const start = Math.max(1, mailbox.exists - windowSize + 1);
-            for await (const item of client.fetch(`${start}:${mailbox.exists}`, fetchQuery)) {
+          if ((status.messages ?? 0) > 0) {
+            const start = Math.max(1, (status.messages ?? 0) - windowSize + 1);
+            for await (const item of client.fetch(`${start}:${status.messages ?? 0}`, fetchQuery)) {
               metas.push(this.toMessageMeta(item, path, mailbox.uidValidity));
             }
           }
@@ -484,7 +491,7 @@ export class ImapSmtpMailManager implements MailManager {
         } else {
           mode = 'uid-diff';
           // New arrivals.
-          if (mailbox.exists > 0 && newCursor.uidNext > cursor.uidNext) {
+          if ((status.messages ?? 0) > 0 && newCursor.uidNext > cursor.uidNext) {
             for await (const item of client.fetch(`${cursor.uidNext}:*`, fetchQuery, {
               uid: true,
             })) {
@@ -492,7 +499,7 @@ export class ImapSmtpMailManager implements MailManager {
             }
           }
           // Flag convergence: bounded flags-only sweep of the known window.
-          if (cursor.known.length && mailbox.exists > 0) {
+          if (cursor.known.length && (status.messages ?? 0) > 0) {
             const knownByUid = new Map(cursor.known.map((k) => [k.uid, k.flags]));
             const changedUids: number[] = [];
             for await (const item of client.fetch(
@@ -517,7 +524,7 @@ export class ImapSmtpMailManager implements MailManager {
 
         // Deletions (both rungs): every known UID missing from the mailbox.
         const presentUids = new Set<number>();
-        if (mailbox.exists > 0) {
+        if ((status.messages ?? 0) > 0) {
           for await (const item of client.fetch('1:*', { uid: true })) {
             presentUids.add(item.uid);
           }
@@ -593,9 +600,7 @@ export class ImapSmtpMailManager implements MailManager {
         };
 
         if (query) {
-          const ast = parseSearch(query);
-          const compiled = compileSearch(ast, folder);
-          
+          const compiled = compileSearch(query ? parseSearch(query) : { op: 'AND', children: [] } as any);
           const combinedLabelIds = Array.from(new Set([...labelIds, ...compiled.postgresLabelIds]));
 
           const targetMailboxes: string[] = [];
@@ -620,6 +625,7 @@ export class ImapSmtpMailManager implements MailManager {
 
           const currentFolderPath = await this.resolveFolder(this.folderKindFromZeroName(folder));
           const inboxPath = await this.resolveFolder('inbox');
+          console.log(`[ImapDriver.list] finalMailboxes: ${finalMailboxes}`);
           
           finalMailboxes.sort((a, b) => {
             if (a === currentFolderPath) return -1;
@@ -656,15 +662,29 @@ export class ImapSmtpMailManager implements MailManager {
               isValidPageToken = true;
             }
           }
+          console.log(`[ImapDriver.list] isValidPageToken=${isValidPageToken}, pageToken=${pageToken}, cacheKey=${cacheKey}`);
+
+          if (pageToken && !isValidPageToken) {
+            throw new Error('Invalid page token');
+          }
 
           if (!isValidPageToken) {
             offset = 0;
+            console.log(`[ImapDriver.list] fetching from IMAP... finalMailboxes:`, finalMailboxes);
             for (const mboxPath of finalMailboxes) {
               try {
                 const mailbox = await client.mailboxOpen(mboxPath);
+                // ImapFlow caches the mailbox object if it was already open.
+                // A NOOP forces the server to send pending untagged EXISTS updates.
+                await client.noop();
+                
+                console.log(`[ImapDriver.list] mboxPath=${mboxPath} exists=${mailbox ? mailbox.exists : 'false'}`);
+                
                 if (mailbox.exists === 0) continue;
                 
+                console.log(`[ImapDriver.list] search criteria:`, compiled.imapCriteria);
                 const uids = await client.search(compiled.imapCriteria, { uid: true });
+                console.log(`[ImapDriver.list] search result uids:`, uids);
                 if (!uids || (uids as number[]).length === 0) continue;
                 
                 const uidsArr = uids as number[];
@@ -784,21 +804,32 @@ export class ImapSmtpMailManager implements MailManager {
           };
 
         } else {
+          console.log(`[ImapDriver.list] !query block. resolving folder=${folder}`);
           const path = await this.resolveFolder(this.folderKindFromZeroName(folder));
           if (!path) return { threads: [], nextPageToken: null };
+          console.log(`[ImapDriver.list] opening path=${path}`);
           const mailbox = await client.mailboxOpen(path);
+          console.log(`[ImapDriver.list] mailbox.exists before noop=${mailbox ? mailbox.exists : 'false'}`);
+          await client.noop();
+          console.log(`[ImapDriver.list] mailbox.exists after noop=${mailbox ? mailbox.exists : 'false'}`);
           if (mailbox.exists === 0) return { threads: [], nextPageToken: null };
 
-          const offset = Number(pageToken ?? 0) || 0;
+          const offset = Number(pageToken ?? 0);
+          if (pageToken && isNaN(offset)) {
+            throw new Error('Invalid page token');
+          }
           const end = mailbox.exists - offset;
           if (end < 1) return { threads: [], nextPageToken: null };
           const start = Math.max(1, end - maxResults + 1);
+          console.log(`[ImapDriver.list] start=${start}, end=${end}, fetching...`);
           for await (const item of client.fetch(`${start}:${end}`, fetchQuery)) {
             metas.push(this.toMessageMeta(item, path, mailbox.uidValidity));
           }
+          console.log(`[ImapDriver.list] fetched ${metas.length} messages.`);
           nextPageToken = start > 1 ? String(offset + (end - start + 1)) : null;
           
           const groups = groupIntoThreads(metas);
+          console.log(`[ImapDriver.list] formed ${groups.length} thread groups.`);
           const newestOf = (g: { messages: MessageMeta[] }) =>
             Math.max(...g.messages.map((m) => m.date.getTime()));
           groups.sort((a, b) => newestOf(b) - newestOf(a));
@@ -1670,6 +1701,7 @@ export class ImapSmtpMailManager implements MailManager {
       }
       const client = await this.connect();
       const mailbox = await client.mailboxOpen(junkPath);
+      await client.noop();
       if (mailbox.exists === 0) {
         return { success: true, message: 'Deleted 0 spam emails', count: 0 } satisfies DeleteAllSpamResponse;
       }

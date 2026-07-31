@@ -19,10 +19,19 @@ describe('search-parser', () => {
 
   it('implicit-AND vs explicit-OR precedence', () => {
     const ast = parseSearch('from:bob OR from:alice subject:hello');
-    // from:bob OR (from:alice AND subject:hello) => OR binds tighter in my token stream?
-    // Wait, typical parse precedence: OR vs AND. Actually the AST might just group OR.
-    // I will write the test to expect what the parser emits for `from:bob OR from:alice subject:hello`.
-    expect(ast).toBeDefined();
+    expect(ast).toEqual({
+      op: 'AND',
+      children: [
+        {
+          op: 'OR',
+          children: [
+            { op: 'from', value: 'bob' },
+            { op: 'from', value: 'alice' }
+          ]
+        },
+        { op: 'subject', value: 'hello' }
+      ]
+    });
   });
 
   it('negated group', () => {
@@ -43,13 +52,12 @@ describe('search-parser', () => {
 
   it('unbalanced parens', () => {
     const ast = parseSearch('(from:a');
-    expect(ast).toBeDefined();
+    expect(ast).toEqual({ op: 'from', value: 'a' });
   });
 
   it('bare NOT/OR/AND as terms', () => {
     const ast = parseSearch('NOT OR AND');
-    // should not crash
-    expect(ast).toBeDefined();
+    expect(ast).toBeNull();
   });
 
   it('AI-generated shape', () => {

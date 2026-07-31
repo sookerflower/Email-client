@@ -41,6 +41,9 @@ import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import nodemailer from 'nodemailer';
 import { Agent, setGlobalDispatcher } from 'undici';
+import dns from 'node:dns';
+
+dns.setDefaultResultOrder('ipv4first');
 
 // undici's default headersTimeout is 300 s; a non-streaming tRPC response
 // (forceSync on the real server: 2–4+ min, growing with mailbox size) sends

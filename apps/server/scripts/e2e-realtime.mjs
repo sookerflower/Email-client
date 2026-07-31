@@ -29,6 +29,9 @@
  *   node scripts/e2e-realtime.mjs --real    # real server (ban-probes first;
  *                                             skips the two-user 403 leg)
  */
+import dns from 'node:dns';
+dns.setDefaultResultOrder('ipv4first');
+
 import { createConnection } from 'node:net';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

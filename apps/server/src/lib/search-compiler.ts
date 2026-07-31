@@ -21,7 +21,11 @@ export function compileSearch(ast: SearchASTNode | null, baseFolder?: string): C
         let merged: any = {};
         for (const c of children) {
           for (const [k, v] of Object.entries(c)) {
-            merged[k] = v;
+            if (k === 'text' && merged.text) {
+              merged.text = `${merged.text} ${v}`;
+            } else {
+              merged[k] = v;
+            }
           }
         }
         return merged;
@@ -38,19 +42,32 @@ export function compileSearch(ast: SearchASTNode | null, baseFolder?: string): C
         return { not: child };
       }
       case 'from':
-        return { from: node.value };
+        return { header: { from: node.value } };
       case 'to':
-        return { to: node.value };
+        return { header: { to: node.value } };
       case 'cc':
-        return { cc: node.value };
+        return { header: { cc: node.value } };
       case 'subject':
         return { subject: node.value };
       case 'text':
         return { text: node.value };
       case 'after':
-        return { since: new Date(node.date!) };
-      case 'before':
-        return { before: new Date(node.date!) };
+      case 'before': {
+        const val = node.date!;
+        let d = new Date(val);
+        if (isNaN(d.getTime())) {
+          const match = val.match(/^(\d+)([ymd])$/);
+          if (match) {
+            const amount = parseInt(match[1], 10);
+            const unit = match[2];
+            d = new Date();
+            if (unit === 'y') d.setFullYear(d.getFullYear() - amount);
+            if (unit === 'm') d.setMonth(d.getMonth() - amount);
+            if (unit === 'd') d.setDate(d.getDate() - amount);
+          }
+        }
+        return node.op === 'after' ? { since: d } : { before: d };
+      }
       case 'is': {
         const val = node.value.toLowerCase();
         if (val === 'unread') return { unseen: true };

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { compileSearch } from './search-compiler';
+import { parseSearch } from './search-parser';
 
 describe('search-compiler', () => {
   it('from', () => expect(compileSearch({ op: 'from', value: 'a' }).imapCriteria).toEqual({ from: 'a' }));
@@ -32,11 +33,21 @@ describe('search-compiler', () => {
   it('in:anywhere', () => expect(compileSearch({ op: 'in', value: 'anywhere' }).folders.include).toContain('anywhere'));
 
   it('unknown throws', () => {
-    expect(() => compileSearch({ op: 'unknown', operator: 'bcc', value: 'a' })).toThrow(/Unsupported operator: bcc/);
+    expect(() => compileSearch({ op: 'unknown', operator: 'bcc', value: 'a' } as any)).toThrow(/Unsupported operator: bcc/);
   });
 
   it('completeness guard', () => {
-    // Assuming compileSearch handles the AST output of parseSearch, it should not throw for valid AST nodes generated from these operators.
-    // We already tested them individually above.
+    const allOps = ['from', 'to', 'cc', 'subject', 'label', 'in', 'after', 'before', 'is', 'has', 'text', 'unknown', 'AND', 'OR', 'NOT'];
+    for (const op of allOps) {
+      const node = { op, value: 'inbox', operator: 'test', date: '2026-07-28', children: [], child: { op: 'text', value: 'a' } } as any;
+      expect(() => compileSearch(node)).not.toThrow(/Unhandled AST node op/);
+    }
+  });
+
+  it('parser -> compiler contract', () => {
+    const query = 'from:alice subject:hello is:unread -label:work (to:bob OR has:attachment) "some text"';
+    const ast = parseSearch(query);
+    expect(ast).toBeDefined();
+    expect(() => compileSearch(ast)).not.toThrow();
   });
 });

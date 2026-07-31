@@ -117,6 +117,10 @@ export class ImapSmtpProxyMailManager implements MailManager {
     return this.rpc('getFolderState', [folder]);
   }
 
+  getThreadFolders(threadIds: string[]): Promise<Record<string, string[]>> {
+    return this.rpc('getThreadFolders', [threadIds]);
+  }
+
   fetchFolderDelta(
     folder: string,
     cursor: (FolderDeltaCursor & { known: { uid: number; flags: string }[] }) | null,

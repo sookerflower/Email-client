@@ -25,6 +25,18 @@ import {
   type IndexLabel,
 } from './mail-index';
 import { generateWhatUserCaresAbout, type UserTopic } from './analyze/interests';
+
+/**
+ * Labels with no IMAP representation. These are carried forward across a
+ * write-through rather than re-derived from the server, because the server
+ * cannot report them back.
+ *
+ * Keep this list SHORT. Every entry is state that a DB wipe destroys and that
+ * no other mail client can see. IMPORTANT and MUTE used to live here and were
+ * removed for exactly that reason -- nothing derived them and nothing could
+ * filter on them.
+ */
+const INDEX_ONLY_LABELS = new Set(['SNOOZED']);
 import { redis } from './services';
 import type { IGetThreadResponse, IGetThreadsResponse, MailManager } from './driver/types';
 import type { ParsedMessage } from '../types';
@@ -344,6 +356,63 @@ export class MailEngine {
 
   async get(id: string) {
     return await this.getThreadFromDB(id);
+  }
+
+  /**
+   * WRITE-THROUGH label mutation. This is the path every user action must
+   * take.
+   *
+   * Order is load-bearing:
+   *   1. write to IMAP (the source of truth) and let failures propagate, so
+   *      the client can roll its optimistic update back. Before this existed
+   *      every mutation was a Postgres write that could not meaningfully
+   *      fail, so there was no error for the UI to react to.
+   *   2. re-read what the SERVER now reports -- flags via syncThread, folder
+   *      membership via getThreadFolders -- and rebuild the index from that,
+   *      never from the labels we intended to write.
+   *
+   * That second point is the whole invariant: Postgres must stay re-derivable
+   * from IMAP. Updating the index from intent is what produced stars and
+   * TRASH labels the server had never heard of, which then vanished on the
+   * next forced resync.
+   *
+   * SNOOZED has no IMAP representation and stays index-only by design; the
+   * INBOX removal that accompanies it does go to the server.
+   */
+  async applyLabels(threadIds: string[], addLabels: string[], removeLabels: string[]) {
+    if (!threadIds.length) return { success: false as const, error: 'no thread ids' };
+
+    // 1. Server first. Any driver/IMAP failure throws out of here.
+    await this.driver.modifyLabels(threadIds, { addLabels, removeLabels });
+
+    // 2. Rebuild the index from server truth.
+    const folders = this.driver.getThreadFolders
+      ? await this.driver.getThreadFolders(threadIds)
+      : {};
+
+    for (const threadId of threadIds) {
+      const serverFolders = folders[threadId] ?? [];
+      // Index-only labels the server cannot represent are carried forward
+      // deliberately, not re-derived.
+      const carried = (await getThreadLabels(this.connectionId, threadId))
+        .map((l) => l.id)
+        .filter((id) => INDEX_ONLY_LABELS.has(id));
+      const keptIndexOnly = carried
+        .filter((id) => !removeLabels.includes(id))
+        .concat(addLabels.filter((id) => INDEX_ONLY_LABELS.has(id)));
+
+      await this.syncThread({
+        threadId,
+        extraLabelIds: [...new Set([...serverFolders, ...keptIndexOnly])],
+      });
+    }
+
+    const affected = [...new Set([...addLabels, ...removeLabels])];
+    for (const l of affected) await this.reloadFolder(l.toLowerCase());
+    for (const threadId of threadIds) {
+      this.broadcast({ type: OutgoingMessageType.Mail_Get, threadId });
+    }
+    return { success: true as const };
   }
 
   async modifyThreadLabelsInDB(threadId: string, addLabels: string[], removeLabels: string[]) {

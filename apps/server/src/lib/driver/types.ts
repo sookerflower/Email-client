@@ -147,6 +147,13 @@ export interface ListParams {
 export interface MailManager {
   config: ManagerConfig;
   getFolderState?(folder: string): Promise<FolderState | null>;
+  /**
+   * Which system folder labels (INBOX/ARCHIVE/SPAM/TRASH) currently hold each
+   * thread, read from the server. Optional: only the IMAP path implements it.
+   * Used by write-through so the index is rebuilt from server truth rather
+   * than from the caller's intent.
+   */
+  getThreadFolders?(threadIds: string[]): Promise<Record<string, string[]>>;
   fetchFolderDelta?(
     folder: string,
     cursor: (FolderDeltaCursor & { known: { uid: number; flags: string }[] }) | null,

@@ -1529,6 +1529,55 @@ export class ImapSmtpMailManager implements MailManager {
     return { threadIds };
   }
 
+  /**
+   * Which system folders currently hold each thread, READ FROM THE SERVER.
+   *
+   * Write-through needs this. After a mutation the index must be rebuilt from
+   * what the server actually reports, never from what the caller intended --
+   * that gap is precisely how the index came to hold star/trash state the
+   * server had never heard of. Per-message tags carry flags but not location
+   * (a message does not know which mailbox lists it), so folder membership
+   * has to be resolved separately and fed back in.
+   *
+   * Returns app-level folder label ids (INBOX / ARCHIVE / SPAM / TRASH) so
+   * callers can hand them straight to syncThread's extraLabelIds.
+   */
+  public getThreadFolders(threadIds: string[]) {
+    return this.withErrorHandler(
+      'getThreadFolders',
+      async () => {
+        const kinds: FolderKind[] = ['inbox', 'archive', 'junk', 'trash'];
+        const out: Record<string, string[]> = {};
+        for (const id of threadIds) out[id] = [];
+        const kindToLabel: Record<string, string> = {
+          inbox: 'INBOX',
+          archive: 'ARCHIVE',
+          junk: 'SPAM',
+          trash: 'TRASH',
+        };
+        for (const kind of kinds) {
+          const members = await this.resolveThreadMembers(threadIds, [kind]);
+          if (members.size === 0) continue;
+          const label = kindToLabel[kind]!;
+          // resolveThreadMembers keys by folder path, not thread id, so a
+          // non-empty result for this kind means at least one member lives
+          // there. Attribute per thread by re-resolving individually only
+          // when more than one thread was asked for.
+          if (threadIds.length === 1) {
+            out[threadIds[0]!]!.push(label);
+          } else {
+            for (const id of threadIds) {
+              const single = await this.resolveThreadMembers([id], [kind]);
+              if (single.size > 0) out[id]!.push(label);
+            }
+          }
+        }
+        return out;
+      },
+      { threadIds },
+    );
+  }
+
   public modifyLabels(ids: string[], options: { addLabels: string[]; removeLabels: string[] }) {
     return this.withErrorHandler(
       'modifyLabels',

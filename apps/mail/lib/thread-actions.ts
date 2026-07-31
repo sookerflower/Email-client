@@ -57,6 +57,14 @@ export async function moveThreadsTo({ threadIds, currentFolder, destination }: M
     let removeLabel = '';
 
     switch (destination) {
+      // RESTORE goes to INBOX, deliberately, not to the folder the thread came
+      // from. IMAP does not remember an origin, and the folder_message ledger
+      // cannot supply one either: a MOVE expunges the source, and
+      // applyFolderLedgerDelta deletes ledger rows for vanished uids, so by
+      // the time a user clicks restore the only recorded folder is Trash.
+      // Recovering the origin would need a previous_folder column written at
+      // move time -- that is the fix if it ever matters. Until then INBOX
+      // matches both the previous behaviour and Gmail's.
       case 'inbox':
         addLabel = LABELS.INBOX;
         removeLabel = isInSpam ? LABELS.SPAM : isInBin ? LABELS.TRASH : '';

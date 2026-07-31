@@ -1594,6 +1594,12 @@ export class ImapSmtpMailManager implements MailManager {
         else if (add.has('INBOX')) moveTarget = 'inbox';
         else if (remove.has('INBOX')) moveTarget = 'archive';
 
+        // MOVE assigns a NEW uid in the destination and EXPUNGES the source,
+        // so the caller's ledger must follow it. Both servers advertise
+        // UIDPLUS, so messageMove hands back a source->destination uid map --
+        // report it rather than making the caller re-fetch and infer.
+        const moves: { from: string; to: string; uidMap: [number, number][] }[] = [];
+
         if (moveTarget) {
           const sourceKinds: FolderKind[] = (
             ['inbox', 'archive', 'junk', 'trash'] as FolderKind[]
@@ -1604,7 +1610,14 @@ export class ImapSmtpMailManager implements MailManager {
             for (const [folder, uids] of members) {
               if (folder === targetPath) continue;
               await client.mailboxOpen(folder);
-              await client.messageMove(uids.join(','), targetPath, { uid: true });
+              const res = await client.messageMove(uids.join(','), targetPath, { uid: true });
+              // messageMove returns `false` when the server declines; only a
+              // UIDPLUS-capable success carries uidMap.
+              const uidMap: [number, number][] =
+                res && typeof res !== 'boolean' && res.uidMap
+                  ? [...(res.uidMap as Map<number, number>).entries()]
+                  : [];
+              moves.push({ from: folder, to: targetPath, uidMap });
             }
           }
         }
@@ -1641,6 +1654,8 @@ export class ImapSmtpMailManager implements MailManager {
               await client.messageFlagsRemove(range, flagOps.removeFlags, { uid: true });
           }
         }
+
+        return { moves };
       },
       { ids, options },
     );

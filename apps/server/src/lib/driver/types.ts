@@ -136,6 +136,15 @@ export interface FolderDelta {
  * Declared once and shared by the contract, the real driver and the proxy, so
  * a param added to one cannot silently go missing from another.
  */
+/**
+ * What a label mutation did to message LOCATIONS, reported back from the
+ * server. `uidMap` is source-uid -> destination-uid, straight from the
+ * UIDPLUS response to MOVE.
+ */
+export interface MoveReport {
+  moves: { from: string; to: string; uidMap: [number, number][] }[];
+}
+
 export interface ListParams {
   folder: string;
   query?: string;
@@ -199,10 +208,17 @@ export interface MailManager {
   markAsRead(threadIds: string[]): Promise<void>;
   markAsUnread(threadIds: string[]): Promise<void>;
   normalizeIds(id: string[]): { threadIds: string[] };
+  /**
+   * Returns the moves it performed. A MOVE assigns a NEW uid in the
+   * destination and expunges the source, so the caller's folder_message
+   * ledger must follow it. Both supported servers advertise UIDPLUS, so
+   * messageMove yields a source->destination uid map: report it rather than
+   * making the caller re-fetch and infer which uid is which.
+   */
   modifyLabels(
     id: string[],
     options: { addLabels: string[]; removeLabels: string[] },
-  ): Promise<void>;
+  ): Promise<MoveReport | void>;
   getAttachment(messageId: string, attachmentId: string): Promise<string | undefined>;
   getUserLabels(): Promise<Label[]>;
   getLabel(id: string): Promise<Label>;

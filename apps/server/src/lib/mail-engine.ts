@@ -22,6 +22,7 @@ import {
   applyFolderLedgerDelta,
   clearFolderLedger,
   clearFolderSyncData,
+  moveLedgerEntry,
   type IndexLabel,
 } from './mail-index';
 import { generateWhatUserCaresAbout, type UserTopic } from './analyze/interests';
@@ -289,9 +290,37 @@ export class MailEngine {
     return await countIndexedThreads(this.connectionId);
   }
 
+  /**
+   * Permanent delete, GUARDED: EXPUNGE only when the thread is already in
+   * Trash on the server; otherwise MOVE it to Trash.
+   *
+   * The UI only offers this from the Bin ("Delete from Bin", and the delete
+   * hotkey branches on folder === 'bin'), so the guard changes nothing users
+   * can currently do. It exists because the procedure is reachable
+   * independently of that UI -- a chat tool or a new shortcut added later
+   * would otherwise get an irreversible action from a surface that never
+   * considered it. Cheap insurance against a caller that has not thought
+   * about it.
+   *
+   * Previously this deleted the INDEX ROW only, which was not deletion at
+   * all: the message stayed on the server and came back on the next full
+   * resync.
+   */
   async deleteThread(id: string) {
+    const folders = this.driver.getThreadFolders
+      ? await this.driver.getThreadFolders([id])
+      : {};
+    const inTrash = (folders[id] ?? []).includes('TRASH');
+
+    if (!inTrash) {
+      // Not in the bin yet -- this is a move, not a destruction.
+      return await this.applyLabels([id], ['TRASH'], []);
+    }
+
+    await this.driver.delete(id); // real IMAP expunge across every folder
     await deleteIndexedThread(this.connectionId, id);
     this.broadcast({ type: OutgoingMessageType.Mail_List, folder: 'trash' });
+    return { success: true as const };
   }
 
   normalizeFolderName(folderName: string) {
@@ -419,7 +448,19 @@ export class MailEngine {
     if (!threadIds.length) return { success: false as const, error: 'no thread ids' };
 
     // 1. Server first. Any driver/IMAP failure throws out of here.
-    await this.driver.modifyLabels(threadIds, { addLabels, removeLabels });
+    const report = (await this.driver.modifyLabels(threadIds, { addLabels, removeLabels })) as
+      | { moves: { from: string; to: string; uidMap: [number, number][] }[] }
+      | undefined;
+
+    // 1b. A MOVE assigns a NEW uid in the destination and expunges the source,
+    // so the folder_message ledger has to follow it or it holds a uid that no
+    // longer exists. UIDPLUS gives us the exact source->destination mapping,
+    // so apply it directly rather than re-fetching and inferring.
+    for (const move of report?.moves ?? []) {
+      for (const [sourceUid, destUid] of move.uidMap) {
+        await moveLedgerEntry(this.connectionId, move.from, sourceUid, move.to, destUid);
+      }
+    }
 
     // 2. Rebuild the index from server truth.
     const folders = this.driver.getThreadFolders

@@ -563,3 +563,63 @@ export async function intersectThreadIdsByLabel(
 }
 
 
+
+/**
+ * Follow a MOVE in the folder_message ledger.
+ *
+ * A MOVE assigns a NEW uid in the destination and EXPUNGES the source, so the
+ * ledger row keyed (connection, sourceFolder, sourceUid) is stale the instant
+ * the move returns. Left alone it survives until the next sync notices the
+ * vanish, and until then deletion attribution reads the wrong row.
+ *
+ * Both supported servers advertise UIDPLUS, so the caller has the exact
+ * source->destination uid mapping from the MOVE response. Applying it here is
+ * precise; re-fetching the destination and guessing which uid is which is not.
+ */
+export const moveLedgerEntry = async (
+  connectionId: string,
+  fromFolder: string,
+  fromUid: number,
+  toFolder: string,
+  toUid: number,
+): Promise<void> => {
+  const existing = await db()
+    .select({ threadId: folderMessage.threadId, flags: folderMessage.flags })
+    .from(folderMessage)
+    .where(
+      and(
+        eq(folderMessage.connectionId, connectionId),
+        eq(folderMessage.folder, fromFolder),
+        eq(folderMessage.uid, fromUid),
+      ),
+    )
+    .limit(1);
+
+  const row = existing[0];
+  if (!row) return; // never indexed; the next sync will pick it up
+
+  await db()
+    .delete(folderMessage)
+    .where(
+      and(
+        eq(folderMessage.connectionId, connectionId),
+        eq(folderMessage.folder, fromFolder),
+        eq(folderMessage.uid, fromUid),
+      ),
+    );
+
+  await db()
+    .insert(folderMessage)
+    .values({
+      connectionId,
+      folder: toFolder,
+      uid: toUid,
+      threadId: row.threadId,
+      flags: row.flags,
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: [folderMessage.connectionId, folderMessage.folder, folderMessage.uid],
+      set: { threadId: row.threadId, flags: row.flags, updatedAt: new Date() },
+    });
+};

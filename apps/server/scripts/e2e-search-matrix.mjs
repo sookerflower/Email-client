@@ -70,7 +70,6 @@ if (!mode.email || !mode.password) {
 
 const runId = Math.random().toString(36).slice(2, 10);
 const LABEL_NAME = `matrix${runId}`;
-const LABEL_ID = `$zl_${LABEL_NAME}`;
 
 let cookie = '';
 
@@ -222,10 +221,15 @@ const FIXTURES = [
     raw: (f) => plain(ALICE, f.subject, 'From the distant past', f.date),
   },
   {
+    // NOTE: no keyword stamped on APPEND. The label is created THROUGH THE
+    // APP after sync (see the apply_label leg) so it lands in the label
+    // registry. A raw APPENDed keyword is not registered, so `label:<name>`
+    // could never resolve against it -- a leg that passed against an
+    // unregistered keyword would be testing the wrong thing.
     key: 'labelled',
     sender: 'alice',
     date: D_TODAY,
-    flags: [LABEL_ID],
+    flags: [],
     subject: S('Labelled'),
     raw: (f) => plain(ALICE, f.subject, 'This message carries a user label', f.date),
   },
@@ -248,6 +252,11 @@ const FIXTURES = [
 ];
 
 const keysWhere = (pred) => FIXTURES.filter(pred).map((f) => f.key);
+const byKeySubject = (key) => FIXTURES.find((f) => f.key === key)?.subject;
+
+// Set by the apply_label leg from the registry, not assumed from LABEL_NAME:
+// createLabel mints the $zl_ id via its own slug rules.
+let resolvedLabelId = null;
 
 const TODAY_KEYS = keysWhere((f) => f.date === D_TODAY);
 const ALICE_KEYS = keysWhere((f) => f.sender === 'alice');
@@ -497,6 +506,75 @@ if (ok) {
 }
 
 if (ok) {
+  ok = await hardLeg('apply_label', async () => {
+    // Reordered seeding: append -> sync -> create label -> apply -> re-poll.
+    // Two new timing dependencies vs the old one-shot APPEND, and BOTH are
+    // bounded polls, never setTimeout: the label must appear in the registry
+    // before it can be applied, and the applied label must reach the index
+    // before `label:` can find it.
+    const deadline = Date.now() + (REAL ? 180_000 : 60_000);
+
+    // Locate the target thread by subject.
+    const target = async () => {
+      const list = await trpc('mail.listThreads', {
+        query: { folder: 'inbox', maxResults: 200 },
+      });
+      for (const t of list.threads ?? []) {
+        const subj = await subjectOf(t.id);
+        if (subj === byKeySubject('labelled')) return t.id;
+      }
+      return null;
+    };
+    let threadId = null;
+    for (;;) {
+      threadId = await target();
+      if (threadId) break;
+      if (Date.now() > deadline) throw new Error('labelled fixture never appeared in the index');
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+
+    // Create through the app so the label is REGISTERED (createLabel mints
+    // the $zl_ id and writes the registry). This is what makes label:<name>
+    // resolvable at all.
+    await trpc('labels.create', { mutationBody: { name: LABEL_NAME } });
+
+    // Poll the registry rather than assuming the write is visible.
+    let resolvedId = null;
+    for (;;) {
+      const labels = await trpc('labels.list', { query: null });
+      const hit = (labels ?? []).find(
+        (l) => l.name?.toLowerCase() === LABEL_NAME.toLowerCase(),
+      );
+      if (hit) {
+        resolvedId = hit.id;
+        resolvedLabelId = hit.id;
+        break;
+      }
+      if (Date.now() > deadline) throw new Error(`label ${LABEL_NAME} never appeared in the registry`);
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+
+    await trpc('mail.modifyLabels', {
+      mutationBody: { threadId: [threadId], addLabels: [resolvedId], removeLabels: [] },
+    });
+
+    // Poll until the label is actually searchable, so downstream legs are not
+    // racing the index write.
+    for (;;) {
+      subjectCache.clear();
+      const got = await fixtureKeysFor({ q: `label:${LABEL_NAME}`, maxResults: 200 });
+      if (got.has('labelled')) break;
+      if (Date.now() > deadline) {
+        throw new Error(`label ${LABEL_NAME} never became searchable after modifyLabels`);
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+
+    return `label ${LABEL_NAME} -> ${resolvedId}, applied and searchable`;
+  });
+}
+
+if (ok) {
   // 1. free text
   await assertControl(
     'free text ("rabbithole")',
@@ -591,10 +669,29 @@ if (ok) {
     'label:<name> must return the labelled thread and not the unlabelled one.',
   );
   await assertControl(
-    `label:${LABEL_ID} (internal id form)`,
-    { q: `label:${LABEL_ID}` },
+    `label:${resolvedLabelId} (internal id form)`,
+    { q: `label:${resolvedLabelId}` },
     ['labelled'],
     'label:<$zl_ id> must return the labelled thread and not the unlabelled one.',
+  );
+
+  // Case sensitivity: resolveKeyword matches label NAMES case-insensitively.
+  // A user typing label:Work for a label registered as "work" must resolve,
+  // not quietly return nothing while looking like a working filter.
+  await assertControl(
+    `label:${LABEL_NAME.toUpperCase()} (name, wrong case)`,
+    { q: `label:${LABEL_NAME.toUpperCase()}` },
+    ['labelled'],
+    'label:<NAME> in the wrong case must resolve case-insensitively to the same label, not silently return empty.',
+  );
+
+  // Fail closed: an unknown label must return NOTHING, never fall through to
+  // the raw value and behave like an unfiltered search.
+  await assertControl(
+    'label:<nonexistent> fails closed',
+    { q: `label:definitelynotalabel${runId}` },
+    [],
+    'An unresolvable label name must return no results. Returning the full fixture set means the filter degraded to unfiltered -- the original defect.',
   );
 
   // 12. category dropdown -> labelIds, no q

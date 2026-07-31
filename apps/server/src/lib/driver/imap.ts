@@ -596,7 +596,45 @@ export class ImapSmtpMailManager implements MailManager {
 
         if (query) {
           const compiled = compileSearch(query ? parseSearch(query) : { op: 'AND', children: [] } as any);
-          const combinedLabelIds = Array.from(new Set([...labelIds, ...compiled.postgresLabelIds]));
+
+          // `label:` resolution has to happen HERE. compileSearch is a pure
+          // function with no driver access, so it pushes whatever the user
+          // typed ("work") straight through, while the index stores the
+          // keyword id ("$zl_work"). Resolving needs the label registry, which
+          // needs the driver -- this is the only place that has both.
+          //
+          // Matching is via resolveKeyword: label NAMES are matched
+          // case-INSENSITIVELY (so `label:Work` finds "work"), label IDS
+          // case-sensitively.
+          //
+          // FAIL CLOSED: an unresolvable name means no such label exists, so
+          // the correct answer is nothing. Never fall through to the raw
+          // value -- that is unfiltered-adjacent and is how this whole class
+          // of bug started.
+          const rawLabelIds = Array.from(new Set([...labelIds, ...compiled.postgresLabelIds]));
+          const combinedLabelIds: string[] = [];
+          let unresolvedLabel: string | null = null;
+          for (const raw of rawLabelIds) {
+            // Already an internal id, or a system label (the category
+            // dropdown passes UNREAD/STARRED) -- neither lives in the
+            // user-label registry.
+            if (raw.startsWith(KEYWORD_PREFIX) || SYSTEM_LABEL_IDS.has(raw)) {
+              combinedLabelIds.push(raw);
+              continue;
+            }
+            const resolved = await this.resolveKeyword(raw);
+            if (!resolved) {
+              unresolvedLabel = raw;
+              break;
+            }
+            combinedLabelIds.push(resolved);
+          }
+          if (unresolvedLabel !== null) {
+            console.warn(
+              `[ImapDriver.list] label "${unresolvedLabel}" is not a known user label; returning no results (fail closed)`,
+            );
+            return { threads: [], nextPageToken: null };
+          }
 
           const targetMailboxes: string[] = [];
           if (compiled.folders.include.includes('anywhere')) {

@@ -325,6 +325,57 @@ await leg('sse-auth', async () => {
   return `401 no-cookie${REAL ? '' : ', 403 other-user'}, 403 foreign-id, 200+open for owner`;
 });
 
+/**
+ * Independent IMAP session -- NEVER the driver under test.
+ *
+ * chat-hitl used to assert its effect by reading the TRASH label back out of
+ * thread_label, the same store the mutation wrote. That is vacuous: it passed
+ * for as long as the chat tools wrote to Postgres only and never touched the
+ * server. Since chat-hitl is now the ONLY end-to-end coverage of the chat
+ * mutation path, it has to read the server directly.
+ */
+const rawImap = async () => {
+  const { ImapFlow } = await import('imapflow');
+  const client = new ImapFlow(
+    REAL
+      ? {
+          host: devVars.IMAP_DEFAULT_IMAP_HOST,
+          port: Number(devVars.IMAP_DEFAULT_IMAP_PORT || 993),
+          secure: true,
+          auth: { user: devVars.TEST_IMAP_USER, pass: devVars.TEST_IMAP_PASSWORD },
+          tls: { rejectUnauthorized: false },
+          logger: false,
+        }
+      : {
+          host: '127.0.0.1',
+          port: 3143,
+          secure: false,
+          auth: { user: mode.email, pass: mode.password },
+          logger: false,
+        },
+  );
+  client.on('error', () => {});
+  await client.connect();
+  return client;
+};
+
+/** Which mailbox currently holds a subject, read from the server. */
+const serverFolderOf = async (subject) => {
+  const c = await rawImap();
+  try {
+    const boxes = await c.list();
+    for (const b of boxes) {
+      let lock;
+      try { lock = await c.getMailboxLock(b.path); } catch { continue; }
+      try {
+        const uids = (await c.search({ header: { subject } }, { uid: true })) || [];
+        if (uids.length) return b.path;
+      } finally { lock.release(); }
+    }
+    return null;
+  } finally { await c.logout(); }
+};
+
 let threadIds = [];
 
 await leg('beacon', async () => {
@@ -674,12 +725,46 @@ await leg('chat-hitl', async () => {
   );
   if (!executed) throw new Error('approved bulkDelete did not execute (no success tool_result)');
 
-  // 3) Effect check: the thread now carries the TRASH label.
+  // 3) Effect check, on the SERVER via an independent IMAP session -- not by
+  //    reading back the label the mutation itself wrote.
   const thread = await trpcA('mail.get', { query: { id: target } });
-  const labelIds = (thread?.labels ?? []).map((l) => l.id);
-  if (!labelIds.includes('TRASH'))
-    throw new Error(`TRASH label missing after approval (labels: ${labelIds.join(',')})`);
-  return 'pending call without approval; APPROVAL.YES continuation executed; TRASH label verified';
+  const subject = thread?.latest?.subject;
+  if (!subject) throw new Error('target thread has no subject to locate on the server');
+
+  let folder = null;
+  const moveDeadline = Date.now() + (REAL ? 60_000 : 20_000);
+  for (;;) {
+    folder = await serverFolderOf(subject);
+    if (folder && /trash|deleted|bin/i.test(folder)) break;
+    if (Date.now() > moveDeadline) {
+      throw new Error(
+        `approved bulkDelete did not reach the server: "${subject}" is in ${folder ?? '(nowhere)'}, expected a Trash mailbox`,
+      );
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+
+  // 4) Survive a forced resync. The index is rebuilt from the server here, so
+  //    a label that only ever existed in Postgres is re-derived away -- which
+  //    is exactly how this class of bug hid. Server placement proves the write
+  //    landed; this proves it is not undone.
+  await trpcA('mail.forceSync', { mutationBody: null });
+  let survived = false;
+  const resyncDeadline = Date.now() + (REAL ? 120_000 : 40_000);
+  for (;;) {
+    const after = await trpcA('mail.get', { query: { id: target } });
+    const ids = (after?.labels ?? []).map((l) => l.id);
+    if (ids.includes('TRASH')) { survived = true; break; }
+    if (Date.now() > resyncDeadline) break;
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  if (!survived) throw new Error('TRASH did not survive a forced resync');
+
+  const stillThere = await serverFolderOf(subject);
+  if (!stillThere || !/trash|deleted|bin/i.test(stillThere)) {
+    throw new Error(`after resync the message left Trash (now in ${stillThere ?? 'nowhere'})`);
+  }
+  return `approved bulkDelete moved it to ${folder} on the server; survived a forced resync`;
 });
 
 await leg('chat-persist', async () => {

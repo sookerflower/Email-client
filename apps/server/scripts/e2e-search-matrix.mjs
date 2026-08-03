@@ -757,6 +757,76 @@ if (ok) {
     'An unresolvable label name must return no results. Returning the full fixture set means the filter degraded to unfiltered -- the original defect.',
   );
 
+  // ---- LEVEL (c) + RESYNC SURVIVAL for the label path ----------------
+  //
+  // The four legs above assert through `label:` search, which resolves via
+  // postgresLabelIds -> intersectThreadIdsByLabel, i.e. Postgres. Index in,
+  // index out: they would pass against a driver that wrote nothing to the
+  // server, which is exactly what they did before write-through landed.
+  //
+  // The label: READ path was always correct -- labels resolve through
+  // Postgres BY DESIGN, and should. What was missing was anything putting the
+  // keyword on the SERVER for Postgres to re-derive from. These two
+  // assertions close that: (c) proves the write reached IMAP, the resync
+  // proves Postgres re-derives it rather than merely remembering it.
+  //
+  // Keyword handling is the last part of driver.modifyLabels that flags and
+  // moves have now been independently verified for and this had not. A red
+  // here is a real finding, not a harness artifact.
+  const labelledSubject = byKeySubject('labelled');
+  const keywordOnServer = async () => {
+    const c = await rawImap();
+    try {
+      const lock = await c.getMailboxLock('INBOX');
+      try {
+        const uids = (await c.search({ header: { subject: labelledSubject } }, { uid: true })) || [];
+        if (!uids.length) return { found: false, flags: [] };
+        const m = await c.fetchOne(String(uids[0]), { flags: true }, { uid: true });
+        return { found: true, flags: [...(m?.flags ?? [])] };
+      } finally {
+        lock.release();
+      }
+    } finally {
+      await c.logout();
+    }
+  };
+
+  try {
+    const before = await keywordOnServer();
+    record(
+      'label: keyword present on the SERVER (level c)',
+      `${resolvedLabelId} among IMAP flags`,
+      before.found ? JSON.stringify(before.flags) : 'message not found on server',
+      before.found && before.flags.includes(resolvedLabelId),
+      'The app applied a label; the IMAP keyword must exist on the message. Absent means the write never left Postgres.',
+    );
+  } catch (error) {
+    record('label: keyword present on the SERVER (level c)', `${resolvedLabelId} among IMAP flags`, `ERROR: ${error.message}`, false);
+  }
+
+  try {
+    await trpc('mail.forceSync', { mutationBody: null });
+    let searchable = false;
+    const deadline = Date.now() + (REAL ? 120_000 : 45_000);
+    for (;;) {
+      subjectCache.clear();
+      const got = await fixtureKeysFor({ q: `label:${LABEL_NAME}`, maxResults: 200 });
+      if (got.has('labelled') && got.size === 1) { searchable = true; break; }
+      if (Date.now() > deadline) break;
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+    const after = await keywordOnServer();
+    record(
+      'label: survives a forced resync',
+      'label: still finds exactly the labelled thread; keyword still on server',
+      `${searchable ? 'searchable' : 'NOT searchable'}; server flags ${JSON.stringify(after.flags)}`,
+      searchable && after.found && after.flags.includes(resolvedLabelId),
+      'A forced resync rebuilds thread_label from server flags. A label that only ever existed in Postgres is re-derived away here -- the failure mode this whole workstream exists to close.',
+    );
+  } catch (error) {
+    record('label: survives a forced resync', 'searchable + keyword on server', `ERROR: ${error.message}`, false);
+  }
+
   // 12. category dropdown -> labelIds, no q
   await assertControl(
     'category dropdown: Unread (labelIds=[UNREAD])',

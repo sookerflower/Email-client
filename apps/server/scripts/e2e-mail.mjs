@@ -1404,5 +1404,52 @@ await leg('census-ceiling', async () => {
   return `ceiling held for every account: maxImap=${s.maxImap}<=${census.imapCeiling} (opens: driver=${s.opens.driver} watcher=${s.opens.watcher} smtp=${s.opens.smtp})`;
 });
 
+
+// Final fixture sweep -- ALWAYS runs, BOTH backends, and sits AFTER the last
+// fixture-appending leg on purpose.
+//
+// The REAL-only cleanup leg above runs mid-file, but list-sort,
+// list-sort-page-slice and derived-vs-stored-threadId append six fixtures
+// AFTER it -- so every green run leaked exactly those six, and the preflight
+// guard tripped on them at the start of the NEXT run (observed three times
+// before the ordering was spotted; the leak predates the guard and was
+// invisible before it). GreenMail had no cleanup at all on the old theory
+// that drop-recover's restart wipes it -- true, but both restarts happen
+// BEFORE the ordering legs too.
+//
+// Sweeps by FIXTURE PREFIX rather than this run's id, so a crashed prior run
+// is cleared as well. Safe on --real: preflight demands zero fixtures at
+// start, so anything matching at the end is ours.
+await leg('final-sweep', async () => {
+  const client = await rawImap();
+  let deleted = 0;
+  try {
+    for (const box of ['INBOX', 'Sent']) {
+      let lock;
+      try {
+        lock = await client.getMailboxLock(box);
+      } catch {
+        continue; // folder may not exist (GreenMail Sent)
+      }
+      try {
+        const all = new Set();
+        for (const prefix of FIXTURE_PREFIXES) {
+          const uids = (await client.search({ header: { subject: prefix } }, { uid: true })) || [];
+          uids.forEach((u) => all.add(u));
+        }
+        if (all.size) {
+          await client.messageDelete([...all].join(','), { uid: true });
+          deleted += all.size;
+        }
+      } finally {
+        lock.release();
+      }
+    }
+  } finally {
+    await client.logout();
+  }
+  return `${deleted} fixture message(s) swept`;
+}, { always: true });
+
 console.log(`\n[e2e] mode=${mode.name} — ${failed ? 'FAILED' : 'ALL LEGS GREEN'}`);
 process.exit(failed ? 1 : 0);

@@ -439,7 +439,7 @@ export function AIChat({
           {(status === 'submitted' || status === 'streaming') && (
             <div className="absolute bottom-0 ml-2 flex items-center gap-2">
               <TextShimmer className="text-muted-foreground text-xs">
-                zero is thinking...
+                agent is thinking...
               </TextShimmer>
               <button
                 type="button"

@@ -1675,7 +1675,21 @@ export class ImapSmtpMailManager implements MailManager {
         }
 
         if (flagOps.addFlags.length > 0 || flagOps.removeFlags.length > 0) {
-          const members = await this.resolveThreadMembers(threadIds);
+          // THREAD_MEMBER_FOLDERS deliberately excludes trash/junk elsewhere
+          // (driver.get, thread content resolution) so binned mail cannot
+          // leak into normal thread search. That exclusion is WRONG here: a
+          // flag/keyword mutation on a thread already in Trash or Spam is a
+          // legitimate action (star a binned message; a chat tool marks a
+          // trashed thread read) and must still find it. Without trash/junk
+          // in scope this silently resolved to ZERO members and no-opped --
+          // found live by the action matrix chaining move-then-flag on one
+          // thread: the keyword never reached the server because by the time
+          // it ran, the message had already moved to Trash.
+          const members = await this.resolveThreadMembers(threadIds, [
+            ...THREAD_MEMBER_FOLDERS,
+            'trash',
+            'junk',
+          ]);
           for (const [folder, uids] of members) {
             await client.mailboxOpen(folder);
             const range = uids.join(',');

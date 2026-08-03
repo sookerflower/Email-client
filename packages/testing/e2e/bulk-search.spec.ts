@@ -39,7 +39,7 @@ test.describe('AI Chat Sidebar', () => {
       const assistantMessages = document.querySelectorAll('[data-message-role="assistant"]');
       return assistantMessages.length > 0 && (assistantMessages[assistantMessages.length - 1].textContent?.trim().length || 0) > 0;
     });
-    await expect(page.getByText('zero is thinking...')).not.toBeVisible();
+    await expect(page.getByText('agent is thinking...')).not.toBeVisible();
     console.log('First AI response completed');
 
     console.log('Clearing editor and typing second command');
@@ -54,7 +54,7 @@ test.describe('AI Chat Sidebar', () => {
       const assistantMessages = document.querySelectorAll('[data-message-role="assistant"]');
       return assistantMessages.length >= 2 && (assistantMessages[1].textContent?.trim().length || 0) > 0;
     });
-    await expect(page.getByText('zero is thinking...')).not.toBeVisible();
+    await expect(page.getByText('agent is thinking...')).not.toBeVisible();
     console.log('Second AI response completed');
 
     console.log('AI chat test completed successfully!');

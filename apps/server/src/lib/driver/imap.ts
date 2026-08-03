@@ -980,7 +980,8 @@ export class ImapSmtpMailManager implements MailManager {
         const seenMessageIds = new Set<string>();
         const labels = new Map<string, string>();
 
-        for (const kind of THREAD_MEMBER_FOLDERS) {
+        const collectFrom = async (kinds: FolderKind[]) => {
+        for (const kind of kinds) {
           const path = await this.resolveFolder(kind);
           if (!path) continue;
           let mailbox;
@@ -1035,6 +1036,20 @@ export class ImapSmtpMailManager implements MailManager {
             message.tags.forEach((t) => labels.set(t.id, t.name));
             messages.push(message);
           }
+        }
+        };
+
+        await collectFrom(THREAD_MEMBER_FOLDERS);
+        if (messages.length === 0) {
+          // Trash/junk fallback, deliberately OUTSIDE the primary member
+          // search so binned mail never joins normal thread resolution -- but
+          // a thread living ONLY there must still be fetchable. Without this,
+          // a full resync could never rebuild binned/spammed threads: their
+          // blobs die with the index and this method was the only way back.
+          // Fires only when the member folders had nothing, so it costs
+          // nothing on the common path and cannot leak trash into threads
+          // that live anywhere else.
+          await collectFrom(['junk', 'trash']);
         }
 
         messages.sort(
@@ -1598,6 +1613,13 @@ export class ImapSmtpMailManager implements MailManager {
         // so the caller's ledger must follow it. Both servers advertise
         // UIDPLUS, so messageMove hands back a source->destination uid map --
         // report it rather than making the caller re-fetch and infer.
+        //
+        // Folders are reported as app KINDS ('inbox', 'trash'), normalized
+        // HERE at the boundary, because that is what the folder_message
+        // ledger keys on. The first execution of this path shipped raw IMAP
+        // paths ('INBOX', 'Trash'); moveLedgerEntry looked up by path, missed
+        // silently, and the ledger lost the row instead of following the
+        // move. IMAP paths must not leak past this method.
         const moves: { from: string; to: string; uidMap: [number, number][] }[] = [];
 
         if (moveTarget) {
@@ -1617,7 +1639,16 @@ export class ImapSmtpMailManager implements MailManager {
                 res && typeof res !== 'boolean' && res.uidMap
                   ? [...(res.uidMap as Map<number, number>).entries()]
                   : [];
-              moves.push({ from: folder, to: targetPath, uidMap });
+              // Canonical ledger folder keys are the APP names ('spam', not
+              // the IMAP kind 'junk') -- the same convention syncFolderJob's
+              // folder argument uses, so a future spam sync job cannot
+              // recreate the path/kind mismatch under a different name.
+              const asLedgerKey = (k: string) => (k === 'junk' ? 'spam' : k);
+              moves.push({
+                from: asLedgerKey(this.getFolderKind(folder) ?? folder.toLowerCase()),
+                to: asLedgerKey(moveTarget),
+                uidMap,
+              });
             }
           }
         }

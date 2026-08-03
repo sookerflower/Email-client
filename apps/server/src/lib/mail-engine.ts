@@ -469,19 +469,47 @@ export class MailEngine {
 
     for (const threadId of threadIds) {
       const serverFolders = folders[threadId] ?? [];
+      const currentLabels = (await getThreadLabels(this.connectionId, threadId)).map((l) => l.id);
       // Index-only labels the server cannot represent are carried forward
       // deliberately, not re-derived.
-      const carried = (await getThreadLabels(this.connectionId, threadId))
-        .map((l) => l.id)
-        .filter((id) => INDEX_ONLY_LABELS.has(id));
-      const keptIndexOnly = carried
-        .filter((id) => !removeLabels.includes(id))
+      const keptIndexOnly = currentLabels
+        .filter((id) => INDEX_ONLY_LABELS.has(id) && !removeLabels.includes(id))
         .concat(addLabels.filter((id) => INDEX_ONLY_LABELS.has(id)));
 
-      await this.syncThread({
-        threadId,
-        extraLabelIds: [...new Set([...serverFolders, ...keptIndexOnly])],
-      });
+      const extraLabelIds = [...new Set([...serverFolders, ...keptIndexOnly])];
+      const synced = await this.syncThread({ threadId, extraLabelIds });
+
+      // Folder-label reconciliation from server truth, on BOTH branches.
+      // upsertThread's folder labels are add-only (each folder's own sync
+      // contributes its label), so a successful syncThread ADDS the new
+      // folder but never drops the old one -- on first execution, archive
+      // left INBOX behind and not-spam left SPAM behind. Restricted to the
+      // folders getThreadFolders actually reports (INBOX/ARCHIVE/SPAM/TRASH):
+      // SENT and DRAFTS are outside its vision, so "not reported" proves
+      // nothing about them and dropping them here would be wrong.
+      const folderLabelsToDrop = currentLabels.filter(
+        (id) => MailEngine.MOVE_FOLDER_LABELS.has(id) && !serverFolders.includes(id),
+      );
+
+      if (synced.success) {
+        if (folderLabelsToDrop.length) {
+          await this.applyIndexLabelsFromSync(threadId, [], folderLabelsToDrop);
+        }
+      } else {
+        // Index-only catch-up from the server-reported folder set. The
+        // server already performed the mutation; the blob keeps its
+        // parse-time content, which a move does not change.
+        const toAdd = extraLabelIds.filter((id) => !currentLabels.includes(id));
+        await this.applyIndexLabelsFromSync(threadId, toAdd, folderLabelsToDrop);
+        if (synced.reason !== 'No latest message') {
+          // Server write succeeded; only the index refresh failed. Do not
+          // throw -- the client's optimistic update must roll back only when
+          // the SERVER rejected the mutation. The next sync converges.
+          console.error(
+            `[MailEngine:${this.connectionId}] applyLabels: index refresh failed for ${threadId} (${synced.reason}); folder labels reconciled, next sync converges`,
+          );
+        }
+      }
     }
 
     const affected = [...new Set([...addLabels, ...removeLabels])];
@@ -959,6 +987,13 @@ export class MailEngine {
     'SNOOZED',
   ]);
 
+  /**
+   * The folder labels getThreadFolders can actually observe -- the only set
+   * write-through reconciliation may DROP from. SENT/DRAFTS are invisible to
+   * it, so their absence from a server report proves nothing.
+   */
+  private static readonly MOVE_FOLDER_LABELS = new Set(['INBOX', 'ARCHIVE', 'SPAM', 'TRASH']);
+
   private async resyncOrRemoveThread(
     threadId: string,
     folderLabel: string,
@@ -1035,6 +1070,20 @@ export class MailEngine {
     // mid-sync-arrival residual, same as syncFolderJob's completion block).
     const preState = (await this.driver.getFolderState?.('inbox').catch(() => null)) ?? null;
     await this.syncFolders();
+    // Trash and Junk must be rebuilt too, or a from-scratch resync DESTROYS
+    // binned/spammed threads: nothing else ever syncs those folders, so
+    // their TRASH/SPAM labels and blobs are only re-derivable by listing
+    // them here (driver.get's trash/junk fallback fetches the content).
+    // First execution of the move path proved it: forceSync dropped a binned
+    // thread from the index entirely while the message sat in Trash on the
+    // server. Failures are non-fatal -- a fresh account may not have these
+    // folders yet.
+    await this.syncFolderOnce('bin').catch((error) =>
+      console.warn(`[MailEngine:${this.connectionId}] forceReSync bin pass failed:`, error?.message),
+    );
+    await this.syncFolderOnce('spam').catch((error) =>
+      console.warn(`[MailEngine:${this.connectionId}] forceReSync spam pass failed:`, error?.message),
+    );
     // Record the cursor this resync was built against (Phase 6.3). Leaving
     // folder_sync_state empty until the next JOB sync both forfeits the 6.2
     // ladder right after every forceSync AND races concurrent job syncs'

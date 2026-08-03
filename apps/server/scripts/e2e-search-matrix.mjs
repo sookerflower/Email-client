@@ -334,6 +334,8 @@ const rawImap = async () => {
 const matrix = [];
 let imap;
 let appendedUids = [];
+// Bleed probe seeded into Trash by the exclusion leg; cleaned up like fixtures.
+let trashBleed = null;
 
 // Registered HERE, before anything is appended -- not next to the cleanup leg
 // at the bottom of the file. This script is top-level-await sequential, so
@@ -348,6 +350,16 @@ const emergencyCleanup = async (why) => {
         await imap.messageDelete(appendedUids.join(','), { uid: true });
       } finally {
         lock.release();
+      }
+      if (trashBleed) {
+        try {
+          const tl = await imap.getMailboxLock(trashBleed.folder);
+          try {
+            await imap.messageDelete(String(trashBleed.uid), { uid: true });
+          } finally {
+            tl.release();
+          }
+        } catch { /* best effort */ }
       }
       console.error('[e2e] emergency cleanup done');
     } else {
@@ -912,23 +924,68 @@ if (ok) {
     record('search result ordering is newest-first', 'non-increasing dates', `ERROR: ${error.message}`, false);
   }
 
-  // 15. Trash/Spam/Drafts exclusion -- --real only (GreenMail has INBOX only)
-  if (REAL) {
-    await assertControl(
-      'default search excludes Trash/Spam/Drafts',
-      { q: `Matrix` },
-      FIXTURES.map((f) => f.key),
-      'A default search must return inbox fixtures only; special-use folders are excluded by compileSearch.',
+  // 15. Trash exclusion -- BOTH backends. This used to skip on GreenMail
+  // ("provisions INBOX only"), but that was an artifact of the driver's
+  // createIfMissing=false search path: resolveFolder('trash', true) CREATES
+  // Trash on GreenMail, and the move work exercises exactly that. The leg
+  // now also seeds a bleed probe INTO Trash, so the exclusion is asserted
+  // against a folder that actually contains a matching message -- the --real
+  // version previously asserted exclusion against folders that might have
+  // held nothing matching, which proves recall, not exclusion.
+  //
+  // The probe is deliberately NOT in FIXTURES: every fixture property
+  // (sender, date, flags) feeds some leg's expected set, so a trash-dwelling
+  // fixture would poison those expectations. It lives outside the universe
+  // and is asserted absent directly.
+  try {
+    const bleedSubject = `Matrix TrashBleed ${runId}`;
+    const c = await rawImap();
+    try {
+      try { await c.mailboxCreate('Trash'); } catch { /* exists */ }
+      const lock = await c.getMailboxLock('Trash');
+      try {
+        const res = await c.append('Trash', [
+          `From: "Carol Danvers" <carol@marvel.test>`,
+          `To: ${mode.email}`,
+          `Subject: ${bleedSubject}`,
+          `Date: ${new Date().toUTCString()}`,
+          `MIME-Version: 1.0`,
+          `Content-Type: text/plain; charset=utf-8`,
+          ``,
+          `this message lives in Trash and must never appear in a default search`,
+        ].join('\r\n'), ['\\Seen'], new Date());
+        if (res?.uid) trashBleed = { folder: 'Trash', uid: res.uid };
+      } finally {
+        lock.release();
+      }
+    } finally {
+      await c.logout();
+    }
+
+    const result = await trpc('mail.listThreads', { query: { q: 'Matrix', maxResults: 200 } });
+    let bleedSeen = false;
+    const got = new Set();
+    for (const t of result.threads ?? []) {
+      const subj = await subjectOf(t.id);
+      if (subj === bleedSubject) bleedSeen = true;
+      if (!subj || !subj.includes(runId)) continue;
+      const fix = FIXTURES.find((f) => f.subject === subj);
+      if (fix) got.add(fix.key);
+    }
+    const missing = FIXTURES.map((f) => f.key).filter((k) => !got.has(k));
+    record(
+      'default search excludes Trash (bleed probe seeded)',
+      `all ${FIXTURES.length} inbox fixtures, bleed probe absent`,
+      bleedSeen
+        ? 'TRASH MESSAGE RETURNED by a default search'
+        : missing.length
+          ? `bleed absent but missing ${fmt(missing)}`
+          : `all ${FIXTURES.length} present, bleed absent`,
+      !bleedSeen && missing.length === 0,
+      'compileSearch must exclude trash/spam/drafts from a default search; a Trash-dwelling match must not surface.',
     );
-  } else {
-    matrix.push({
-      control: 'Trash/Spam/Drafts exclusion',
-      expected: 'special-use folders excluded',
-      actual: 'SKIPPED - GreenMail provisions INBOX only',
-      verdict: 'SKIP',
-      detail: 'Runs on --real where Dovecot advertises special-use tags.',
-    });
-    console.log('[matrix] SKIP  Trash/Spam/Drafts exclusion (GreenMail: INBOX only)');
+  } catch (error) {
+    record('default search excludes Trash (bleed probe seeded)', 'bleed probe absent', `ERROR: ${error.message}`, false);
   }
 }
 
@@ -946,6 +1003,19 @@ await hardLeg('cleanup', async () => {
       await trpc('mail.forceSync', { mutationBody: null });
     } catch {
       /* index cleanup is best-effort */
+    }
+  }
+
+  if (trashBleed) {
+    try {
+      const lock = await imap.getMailboxLock(trashBleed.folder);
+      try {
+        await imap.messageDelete(String(trashBleed.uid), { uid: true });
+      } finally {
+        lock.release();
+      }
+    } catch (error) {
+      console.error(`[e2e] trash bleed-probe cleanup failed: ${error.message}`);
     }
   }
 

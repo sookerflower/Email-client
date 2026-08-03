@@ -140,6 +140,11 @@ export interface FolderDelta {
  * What a label mutation did to message LOCATIONS, reported back from the
  * server. `uidMap` is source-uid -> destination-uid, straight from the
  * UIDPLUS response to MOVE.
+ *
+ * `from`/`to` are app folder KINDS ('inbox', 'trash', 'junk', 'archive') --
+ * the same keys the folder_message ledger uses -- normalized inside the
+ * driver. Never IMAP paths: the first execution of the move path shipped
+ * 'INBOX'/'Trash' and the ledger lookup missed silently.
  */
 export interface MoveReport {
   moves: { from: string; to: string; uidMap: [number, number][] }[];

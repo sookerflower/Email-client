@@ -405,6 +405,45 @@ export class MailEngine {
     const labelsList: IndexLabel[] = await getThreadLabels(this.connectionId, id);
     const labelIds = labelsList.map((l) => l.id);
 
+    // FLAGS ARE MUTABLE STATE AND MUST NEVER BE READ FROM THE BLOB.
+    //
+    // The blob is an IMMUTABLE point-in-time CONTENT snapshot, written when a
+    // message was last fetched and parsed. Flags are not content: they change
+    // constantly and from outside this app. Reading them from the blob is
+    // wrong in both directions --
+    //   - a local action (star, mark read) updates thread_label and the
+    //     server, but never the blob, so the star icon went dark the moment
+    //     the optimistic update cleared even though the server was correct;
+    //   - an EXTERNAL change (a phone marking mail read) updates thread_label
+    //     on the next sync but never the blob, so it was already wrong before
+    //     write-through existed.
+    // thread_label is re-derived from server flags on every sync, so it is
+    // the only source that tracks them. `hasUnread` above already worked this
+    // way; per-message tags now do too.
+    //
+    // Projected THREAD-level, which is safe here: every write path in this app
+    // is thread-scoped (toggleStar/markAsRead/modifyLabels all take thread
+    // ids), and per-message unread rendering does not exist -- mail-display
+    // explicitly strips 'unread'/'inbox' from its chips. Only an external
+    // client could create per-message divergence, and this app has no UI to
+    // show it.
+    //
+    // Folder labels stay OUT of `tags` and remain in `labels`: tags carry the
+    // flag-like state the chips and star icon render, exactly the set that
+    // used to be flag-derived (UNREAD / STARRED / $zl_ user keywords).
+    // ensureLabels stores name = id, so system tags keep the 'STARRED' /
+    // 'UNREAD' spelling the client matches on. User keywords must shed the
+    // '$zl_' prefix or the chips would render "$zl_work" where the
+    // blob-derived path showed "work".
+    const tagLabels = labelsList
+      .filter((l) => l.id === 'UNREAD' || l.id === 'STARRED' || l.id.startsWith('$zl_'))
+      .map((l) => ({
+        id: l.id,
+        name: l.id.startsWith('$zl_') ? (l.name || l.id).replace(/^\$zl_/, '') : l.name,
+        type: l.id.startsWith('$zl_') ? 'user' : 'system',
+      }));
+    messages = messages.map((m) => ({ ...m, tags: tagLabels }));
+
     return {
       messages,
       latest: messages.findLast((e) => e.isDraft !== true),

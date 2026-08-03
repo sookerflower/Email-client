@@ -72,6 +72,17 @@ export function compileSearch(ast: SearchASTNode | null, baseFolder?: string): C
         const val = node.value.toLowerCase();
         if (val === 'unread') return { unseen: true };
         if (val === 'read') return { seen: true };
+        // `is:important` is an INPUT ALIAS for `is:starred`, not a second
+        // control. IMAP has one flag here (\Flagged) and nothing derives a
+        // separate notion of importance -- which is why the Important
+        // category and the important toggle were both removed. The alias
+        // survives only so a user typing Gmail syntax gets results instead of
+        // "Unsupported is: value"; the parser already aliases this way
+        // (after/newer_than, before/older_than).
+        //
+        // Deliberately NOT advertised in the AI search prompt: accept it on
+        // input, never emit it, so generated queries stay canonical and two
+        // spellings of one filter cannot look like two filters.
         if (val === 'important' || val === 'starred') return { flagged: true };
         if (['inbox', 'sent', 'draft', 'trash', 'spam'].includes(val)) {
           folders.include.push(val);

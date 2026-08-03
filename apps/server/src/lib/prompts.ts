@@ -261,7 +261,7 @@ export const ImapSearchAssistantSystemPrompt = () =>
     <Operator name="subject:">matches the Subject header</Operator>
     <Operator name="label:">a user label name</Operator>
     <Operator name="in:">folder: inbox, sent, draft, trash, spam, or anywhere</Operator>
-    <Operator name="is:">unread, read, starred, important, inbox, sent, draft, trash, spam</Operator>
+    <Operator name="is:">unread, read, starred, inbox, sent, draft, trash, spam</Operator>
     <Operator name="has:">attachment (this is the ONLY supported has: value)</Operator>
     <Operator name="after:">YYYY/MM/DD, or newer_than: with 7d / 3m / 1y</Operator>
     <Operator name="before:">YYYY/MM/DD, or older_than: with 7d / 3m / 1y</Operator>

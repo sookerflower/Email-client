@@ -1,6 +1,5 @@
 import {
   Archive2,
-  ExclamationCircle,
   GroupPeople,
   Star2,
   Trash,
@@ -75,18 +74,13 @@ const Thread = memo(
 
     const optimisticState = useOptimisticThreadState(idToUse ?? '');
 
-    const { displayStarred, displayImportant, displayUnread, optimisticLabels, emailContent } =
+    const { displayStarred, displayUnread, optimisticLabels, emailContent } =
       useMemo(() => {
         const emailContent = getThreadData?.latest?.body;
         const displayStarred =
           optimisticState.optimisticStarred !== null
             ? optimisticState.optimisticStarred
             : (getThreadData?.latest?.tags?.some((tag) => tag.name === 'STARRED') ?? false);
-
-        const displayImportant =
-          optimisticState.optimisticImportant !== null
-            ? optimisticState.optimisticImportant
-            : (getThreadData?.latest?.tags?.some((tag) => tag.name === 'IMPORTANT') ?? false);
 
         const displayUnread =
           optimisticState.optimisticRead !== null
@@ -121,14 +115,12 @@ const Thread = memo(
 
         return {
           displayStarred,
-          displayImportant,
           displayUnread,
           optimisticLabels: labels,
           emailContent,
         };
       }, [
         optimisticState.optimisticStarred,
-        optimisticState.optimisticImportant,
         optimisticState.optimisticRead,
         getThreadData?.latest?.tags,
         getThreadData?.hasUnread,
@@ -136,7 +128,7 @@ const Thread = memo(
         optimisticState.optimisticLabels,
       ]);
 
-    const { optimisticToggleStar, optimisticToggleImportant, optimisticMoveThreadsTo } =
+    const { optimisticToggleStar, optimisticMoveThreadsTo } =
       useOptimisticActions();
 
     const handleToggleStar = useCallback(
@@ -150,16 +142,6 @@ const Thread = memo(
       [getThreadData, idToUse, displayStarred, optimisticToggleStar],
     );
 
-    const handleToggleImportant = useCallback(
-      async (e: React.MouseEvent) => {
-        e.stopPropagation();
-        if (!getThreadData || !idToUse) return;
-
-        const newImportantState = !displayImportant;
-        optimisticToggleImportant([idToUse], newImportantState);
-      },
-      [getThreadData, idToUse, displayImportant, optimisticToggleImportant],
-    );
 
     const handleNext = useCallback(
       (id: string) => {
@@ -270,29 +252,6 @@ const Thread = memo(
                   {displayStarred
                     ? m['common.threadDisplay.unstar']()
                     : m['common.threadDisplay.star']()}
-                </TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={cn(
-                      'h-6 w-6 [&_svg]:size-3.5',
-                      displayImportant ? 'hover:bg-orange-200/70 dark:hover:bg-orange-800/40' : '',
-                    )}
-                    onClick={handleToggleImportant}
-                  >
-                    <ExclamationCircle
-                      className={cn(displayImportant ? 'fill-orange-400' : 'fill-[#9D9D9D]')}
-                    />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent
-                  side={index === 0 ? 'bottom' : 'top'}
-                  className="dark:bg-panelDark mb-1 bg-white"
-                >
-                  {m['common.mail.toggleImportant']()}
                 </TooltipContent>
               </Tooltip>
               <Tooltip>

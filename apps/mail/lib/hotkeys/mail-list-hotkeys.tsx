@@ -30,7 +30,6 @@ export function MailListHotkeys() {
     optimisticMarkAsRead,
     optimisticMarkAsUnread,
     optimisticMoveThreadsTo,
-    optimisticToggleImportant,
     optimisticDeleteThreads,
     optimisticToggleStar,
   } = useOptimisticActions();
@@ -92,21 +91,6 @@ export function MailListHotkeys() {
 
     optimisticMarkAsUnread(idsToMark);
   }, [mail.bulkSelected, optimisticMarkAsUnread, shouldUseHover]);
-
-  const markAsImportant = useCallback(() => {
-    if (shouldUseHover && hoveredEmailId.current) {
-      optimisticToggleImportant([hoveredEmailId.current], true);
-      return;
-    }
-
-    const idsToMark = mail.bulkSelected;
-    if (idsToMark.length === 0) {
-      toast.info(m['common.mail.noEmailsToSelect']());
-      return;
-    }
-
-    optimisticToggleImportant(idsToMark, true);
-  }, [mail.bulkSelected, optimisticToggleImportant, shouldUseHover]);
 
   const archiveEmail = useCallback(async () => {
     if (shouldUseHover && hoveredEmailId.current) {
@@ -212,7 +196,6 @@ export function MailListHotkeys() {
     () => ({
       markAsRead,
       markAsUnread,
-      markAsImportant,
       selectAll,
       archiveEmail,
       bulkArchive,
@@ -230,7 +213,6 @@ export function MailListHotkeys() {
       // switchCategoryByIndex,
       markAsRead,
       markAsUnread,
-      markAsImportant,
       selectAll,
       archiveEmail,
       bulkArchive,

@@ -19,7 +19,6 @@ enum ActionType {
   STAR = 'STAR',
   READ = 'READ',
   LABEL = 'LABEL',
-  IMPORTANT = 'IMPORTANT',
   SNOOZE = 'SNOOZE',
   UNSNOOZE = 'UNSNOOZE',
   DELETE_DRAFT = 'DELETE_DRAFT',
@@ -29,7 +28,6 @@ enum ActionType {
 interface ActionParams {
   starred?: boolean;
   read?: boolean;
-  important?: boolean;
   labelId?: string;
   add?: boolean;
   currentFolder?: string;
@@ -41,8 +39,6 @@ const actionEventNames: Record<ActionType, (params: ActionParams) => string> = {
   [ActionType.MOVE]: () => 'email_moved',
   [ActionType.STAR]: (params) => (params.starred ? 'email_starred' : 'email_unstarred'),
   [ActionType.READ]: (params) => (params.read ? 'email_marked_read' : 'email_marked_unread'),
-  [ActionType.IMPORTANT]: (params) =>
-    params.important ? 'email_marked_important' : 'email_unmarked_important',
   [ActionType.LABEL]: (params) => (params.add ? 'email_label_added' : 'email_label_removed'),
   [ActionType.SNOOZE]: () => 'email_snoozed',
   [ActionType.UNSNOOZE]: () => 'email_unsnoozed',
@@ -62,7 +58,6 @@ export function useOptimisticActions() {
   const { mutateAsync: markAsUnread } = useMutation(trpc.mail.markAsUnread.mutationOptions());
 
   const { mutateAsync: toggleStar } = useMutation(trpc.mail.toggleStar.mutationOptions());
-  const { mutateAsync: toggleImportant } = useMutation(trpc.mail.toggleImportant.mutationOptions());
 
   const { mutateAsync: bulkDeleteThread } = useMutation(trpc.mail.bulkDelete.mutationOptions());
   const { mutateAsync: snoozeThreads } = useMutation(trpc.mail.snoozeThreads.mutationOptions());
@@ -380,37 +375,6 @@ export function useOptimisticActions() {
     });
   }
 
-  const optimisticToggleImportant = useCallback(
-    (threadIds: string[], isImportant: boolean) => {
-      if (!threadIds.length) return;
-
-      const optimisticId = addOptimisticAction({
-        type: 'IMPORTANT',
-        threadIds,
-        important: isImportant,
-      });
-
-      createPendingAction({
-        type: 'IMPORTANT',
-        threadIds,
-        params: { important: isImportant },
-        optimisticId,
-        execute: async () => {
-          await toggleImportant({ ids: threadIds });
-
-          if (mail.bulkSelected.length > 0) {
-            setMail((prev) => ({ ...prev, bulkSelected: [] }));
-          }
-        },
-        undo: () => {
-          removeOptimisticAction(optimisticId);
-        },
-        toastMessage: isImportant ? 'Marked as important' : 'Unmarked as important',
-      });
-    },
-    [queryClient, addOptimisticAction, removeOptimisticAction, toggleImportant, setMail],
-  );
-
   function optimisticToggleLabel(threadIds: string[], labelId: string, add: boolean) {
     if (!threadIds.length || !labelId) return;
 
@@ -551,7 +515,6 @@ export function useOptimisticActions() {
     optimisticToggleStar,
     optimisticMoveThreadsTo,
     optimisticDeleteThreads,
-    optimisticToggleImportant,
     optimisticToggleLabel,
     optimisticSnooze,
     optimisticUnsnooze,

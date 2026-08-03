@@ -147,7 +147,6 @@ const StreamingText = ({ text }: { text: string }) => {
 type Props = {
   emailData: ParsedMessage;
   isFullscreen: boolean;
-  isMuted: boolean;
   isLoading: boolean;
   index: number;
   totalEmails?: number;

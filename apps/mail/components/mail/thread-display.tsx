@@ -2,7 +2,6 @@ import {
   Archive,
   ArchiveX,
   Folders,
-  Lightning,
   Mail,
   Printer,
   Reply,
@@ -33,8 +32,6 @@ import type { ParsedMessage, Attachment } from '@/types';
 import { useAnimations } from '@/hooks/use-animations';
 import { AnimatePresence, motion } from 'motion/react';
 import { MailDisplaySkeleton } from './mail-skeleton';
-import { useTRPC } from '@/providers/query-provider';
-import { useMutation } from '@tanstack/react-query';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Button } from '@/components/ui/button';
 import { cleanHtml } from '@/lib/email-utils';
@@ -97,7 +94,6 @@ export function ThreadDemo({ messages, isMobile }: ThreadDisplayProps) {
                     demo
                     emailData={message}
                     isFullscreen={isFullscreen}
-                    isMuted={false}
                     isLoading={false}
                     index={index}
                   />
@@ -158,10 +154,9 @@ export function ThreadDisplay() {
 
   const folder = params?.folder ?? 'inbox';
   const [id, setThreadId] = useQueryState('threadId');
-  const { data: emailData, isLoading, refetch: refetchThread } = useThread(id ?? null);
+  const { data: emailData, isLoading } = useThread(id ?? null);
   const [, items] = useThreads();
   const [isStarred, setIsStarred] = useState(false);
-  const [isImportant, setIsImportant] = useState(false);
 
   const [navigationDirection, setNavigationDirection] = useState<'previous' | 'next' | null>(null);
 
@@ -183,8 +178,6 @@ export function ThreadDisplay() {
   const [, setDraftId] = useQueryState('draftId');
 
   const [focusedIndex, setFocusedIndex] = useAtom(focusedIndexAtom);
-  const trpc = useTRPC();
-  const { mutateAsync: toggleImportant } = useMutation(trpc.mail.toggleImportant.mutationOptions());
   const [, setIsComposeOpen] = useQueryState('isComposeOpen');
 
   // Get optimistic state for this thread
@@ -648,23 +641,11 @@ export function ThreadDisplay() {
     }
   };
 
-  const handleToggleImportant = useCallback(async () => {
-    if (!emailData || !id) return;
-    await toggleImportant({ ids: [id] });
-    await refetchThread();
-    if (isImportant) {
-      toast.success(m['common.mail.markedAsImportant']());
-    } else {
-      toast.error('Failed to mark as important');
-    }
-  }, [emailData, id]);
-
   // Set initial star state based on email data
   useEffect(() => {
     if (emailData?.latest?.tags) {
       // Check if any tag has the name 'STARRED'
       setIsStarred(emailData.latest.tags.some((tag) => tag.name === 'STARRED'));
-      setIsImportant(emailData.latest.tags.some((tag) => tag.name === 'IMPORTANT'));
     }
   }, [emailData?.latest?.tags]);
 
@@ -916,12 +897,6 @@ export function ThreadDisplay() {
                         ) : null}
                       </>
                     )}
-                    {!isImportant && (
-                      <DropdownMenuItem onClick={handleToggleImportant}>
-                        <Lightning className="fill-iconLight dark:fill-iconDark mr-2" />
-                        {m['common.mail.markAsImportant']()}
-                      </DropdownMenuItem>
-                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
@@ -1034,7 +1009,6 @@ const MessageList = ({
             <MailDisplay
               emailData={message}
               isFullscreen={isFullscreen}
-              isMuted={false}
               isLoading={false}
               index={index}
               totalEmails={totalReplies}

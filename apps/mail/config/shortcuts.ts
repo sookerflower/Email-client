@@ -240,13 +240,6 @@ const mailListShortcuts: Shortcut[] = [
     scope: 'mail-list',
   },
   {
-    keys: ['i'],
-    action: 'markAsImportant',
-    type: 'single',
-    description: 'Mark as important',
-    scope: 'mail-list',
-  },
-  {
     keys: ['a'],
     action: 'bulkArchive',
     type: 'single',
@@ -279,13 +272,6 @@ const mailListShortcuts: Shortcut[] = [
   //   action: 'exitSelectionMode',
   //   type: 'single',
   //   description: 'Exit selection mode',
-  //   scope: 'mail-list',
-  // },
-  // {
-  //   keys: ['m'],
-  //   action: 'muteThread',
-  //   type: 'single',
-  //   description: 'Mute thread',
   //   scope: 'mail-list',
   // },
   {
@@ -353,13 +339,6 @@ const mailListShortcuts: Shortcut[] = [
   //   description: 'Scroll up',
   //   scope: 'mail-list',
   // },
-  {
-    keys: ['1'],
-    action: 'showImportant',
-    type: 'single',
-    description: 'Show important',
-    scope: 'mail-list',
-  },
   {
     keys: ['2'],
     action: 'showAllMail',

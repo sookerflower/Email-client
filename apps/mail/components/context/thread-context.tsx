@@ -27,7 +27,7 @@ import {
 import { useOptimisticThreadState } from '@/components/mail/optimistic-thread-state';
 import { LabelDialog } from '@/components/labels/label-dialog';
 import { useOptimisticActions } from '@/hooks/use-optimistic-actions';
-import { ExclamationCircle, Mail, Clock } from '../icons/icons';
+import { Mail, Clock } from '../icons/icons';
 import { SnoozeDialog } from '@/components/mail/snooze-dialog';
 import { type ThreadDestination } from '@/lib/thread-actions';
 import { useThread, useThreads } from '@/hooks/use-threads';
@@ -168,7 +168,6 @@ export function ThreadContextMenu({
   const {
     optimisticMoveThreadsTo,
     optimisticToggleStar,
-    optimisticToggleImportant,
     optimisticMarkAsRead,
     optimisticMarkAsUnread,
     // optimisticDeleteThreads,
@@ -178,7 +177,7 @@ export function ThreadContextMenu({
   const { mutateAsync: deleteThread } = useMutation(trpc.mail.delete.mutationOptions());
   const { mutateAsync: createLabel } = useMutation(trpc.labels.create.mutationOptions());
 
-  const { isUnread, isStarred, isImportant } = useMemo(() => {
+  const { isUnread, isStarred } = useMemo(() => {
     const unread = threadData?.hasUnread ?? false;
 
     let starred;
@@ -190,17 +189,8 @@ export function ThreadContextMenu({
       );
     }
 
-    let important;
-    if (optimisticState.optimisticImportant !== null) {
-      important = optimisticState.optimisticImportant;
-    } else {
-      important = threadData?.messages.some((message) =>
-        message.tags?.some((tag) => tag.name.toLowerCase() === 'important'),
-      );
-    }
-
-    return { isUnread: unread, isStarred: starred, isImportant: important };
-  }, [threadData, optimisticState.optimisticStarred, optimisticState.optimisticImportant]);
+    return { isUnread: unread, isStarred: starred };
+  }, [threadData, optimisticState.optimisticStarred]);
 
   const handleMove = (from: string, to: string) => () => {
     try {
@@ -235,19 +225,6 @@ export function ThreadContextMenu({
 
     optimisticToggleStar(targets, newStarredState);
 
-    if (mail.bulkSelected.length) {
-      setMail((prev) => ({ ...prev, bulkSelected: [] }));
-    }
-  };
-
-  const handleToggleImportant = () => {
-    const targets = mail.bulkSelected.length ? mail.bulkSelected : [threadId];
-    const newImportantState = !isImportant;
-
-    // Use optimistic update with undo functionality
-    optimisticToggleImportant(targets, newImportantState);
-
-    // Clear bulk selection after action
     if (mail.bulkSelected.length) {
       setMail((prev) => ({ ...prev, bulkSelected: [] }));
     }
@@ -527,14 +504,6 @@ export function ThreadContextMenu({
         disabled: false,
       },
       {
-        id: 'toggle-important',
-        label: isImportant
-          ? m['common.mail.removeFromImportant']()
-          : m['common.mail.markAsImportant'](),
-        icon: <ExclamationCircle className="mr-2.5 h-4 w-4 fill-[#9D9D9D] dark:fill-[#9D9D9D]" />,
-        action: handleToggleImportant,
-      },
-      {
         id: 'favorite',
         label: isStarred ? m['common.mail.removeFavorite']() : m['common.mail.addFavorite'](),
         icon: isStarred ? (
@@ -552,7 +521,7 @@ export function ThreadContextMenu({
         disabled: false,
       },
     ],
-    [isUnread, isImportant, isStarred, m, handleReadUnread, handleToggleImportant, handleFavorites],
+    [isUnread, isStarred, m, handleReadUnread, handleFavorites],
   );
 
   const renderAction = (action: EmailAction) => {

@@ -127,13 +127,6 @@ const mailListShortcuts: Shortcut[] = [
   //   scope: 'mail-list',
   // },
   // {
-  //   keys: ['m'],
-  //   action: 'muteThread',
-  //   type: 'single',
-  //   description: 'Mute thread',
-  //   scope: 'mail-list',
-  // },
-  // {
   //   keys: ['e'],
   //   action: 'archiveEmail',
   //   type: 'single',

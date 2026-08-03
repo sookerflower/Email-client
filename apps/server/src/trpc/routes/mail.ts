@@ -208,16 +208,6 @@ export const mailRouter = router({
       const { activeConnection } = ctx;
       return applyThreadLabels(activeConnection.id, input.ids, ['UNREAD'], []);
     }),
-  markAsImportant: activeDriverProcedure
-    .input(
-      z.object({
-        ids: z.string().array(),
-      }),
-    )
-    .mutation(async ({ input, ctx }) => {
-      const { activeConnection } = ctx;
-      return applyThreadLabels(activeConnection.id, input.ids, ['IMPORTANT'], []);
-    }),
   modifyLabels: activeDriverProcedure
     .input(
       z.object({
@@ -298,56 +288,6 @@ export const mailRouter = router({
 
       return { success: true };
     }),
-  toggleImportant: activeDriverProcedure
-    .input(
-      z.object({
-        ids: z.string().array(),
-      }),
-    )
-    .mutation(async ({ input, ctx }) => {
-      const { activeConnection } = ctx;
-      const executionCtx = getContext<HonoContext>().executionCtx;
-      const { stub: agent } = await getZeroAgent(activeConnection.id, executionCtx);
-      const { threadIds } = await agent.normalizeIds(input.ids);
-
-      if (!threadIds.length) {
-        return { success: false, error: 'No thread IDs provided' };
-      }
-
-      const threadResults = await Promise.allSettled(
-        threadIds.map(async (id: string) => {
-          const thread = await getThread(activeConnection.id, id);
-          return thread.result;
-        }),
-      );
-
-      let anyImportant = false;
-      let processedThreads = 0;
-
-      for (const result of threadResults) {
-        if (result.status === 'fulfilled' && result.value && result.value.messages.length > 0) {
-          processedThreads++;
-          const isThreadImportant = result.value.messages.some((message) =>
-            message.tags?.some((tag) => tag.name.toLowerCase().startsWith('important')),
-          );
-          if (isThreadImportant) {
-            anyImportant = true;
-            break;
-          }
-        }
-      }
-
-      const shouldMarkImportant = processedThreads > 0 && !anyImportant;
-
-      await applyThreadLabels(
-        activeConnection.id,
-        threadIds,
-        shouldMarkImportant ? ['IMPORTANT'] : [],
-        shouldMarkImportant ? [] : ['IMPORTANT'],
-      );
-
-      return { success: true };
-    }),
   bulkStar: activeDriverProcedure
     .input(
       z.object({
@@ -357,16 +297,6 @@ export const mailRouter = router({
     .mutation(async ({ input, ctx }) => {
       const { activeConnection } = ctx;
       return applyThreadLabels(activeConnection.id, input.ids, ['STARRED'], []);
-    }),
-  bulkMarkImportant: activeDriverProcedure
-    .input(
-      z.object({
-        ids: z.string().array(),
-      }),
-    )
-    .mutation(async ({ input, ctx }) => {
-      const { activeConnection } = ctx;
-      return applyThreadLabels(activeConnection.id, input.ids, ['IMPORTANT'], []);
     }),
   bulkUnstar: activeDriverProcedure
     .input(
@@ -397,16 +327,6 @@ export const mailRouter = router({
       };
     }
   }),
-  bulkUnmarkImportant: activeDriverProcedure
-    .input(
-      z.object({
-        ids: z.string().array(),
-      }),
-    )
-    .mutation(async ({ input, ctx }) => {
-      const { activeConnection } = ctx;
-      return applyThreadLabels(activeConnection.id, input.ids, [], ['IMPORTANT']);
-    }),
 
   send: activeDriverProcedure
     .input(
@@ -610,16 +530,6 @@ export const mailRouter = router({
     .mutation(async ({ input, ctx }) => {
       const { activeConnection } = ctx;
       return applyThreadLabels(activeConnection.id, input.ids, [], ['INBOX']);
-    }),
-  bulkMute: activeDriverProcedure
-    .input(
-      z.object({
-        ids: z.string().array(),
-      }),
-    )
-    .mutation(async ({ input, ctx }) => {
-      const { activeConnection } = ctx;
-      return applyThreadLabels(activeConnection.id, input.ids, ['MUTE'], []);
     }),
   getEmailAliases: activeDriverProcedure.query(async ({ ctx }) => {
     const { activeConnection } = ctx;

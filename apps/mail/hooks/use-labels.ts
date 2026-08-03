@@ -3,7 +3,6 @@ import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
 
 const desiredSystemLabels = new Set([
-  'IMPORTANT',
   'FORUMS',
   'PROMOTIONS',
   'SOCIAL',

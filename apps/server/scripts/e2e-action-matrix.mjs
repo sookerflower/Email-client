@@ -865,12 +865,29 @@ if (ok && !fatal) {
     //
     // This is a REAL gap in the same class as the original bug -- state
     // reachable only through Postgres, silently lost on a broader reset --
-    // and it is reported as a FAIL below, not swept into a SKIP. Fixing it
-    // means either mirroring the registry onto IMAP (a keyword naming
-    // convention, e.g. $zl_meta_<id>=<name>) or rebuilding it by scanning
-    // live server keywords the way driver.get's trash/junk fallback rebuilds
-    // thread content. Neither is implemented; this is the record that the
-    // gap exists and was found on purpose.
+    // and it is reported as a KNOWN_GAP below, not swept into a SKIP.
+    //
+    // EXPOSURE SCOPE, precisely: forceReSync does NOT touch the registry, so
+    // ordinary resyncs -- including everything the app does to itself -- are
+    // safe. The exposure is specifically a FROM-NOTHING rebuild, i.e. the
+    // Phase 6.5 "wipe Postgres, boot worker+api from nothing" drill, which
+    // is the project's STATED recovery story. After that drill: the keyword
+    // survives (it lives on the server); the human-readable name does not.
+    //
+    // Fix options, with a recorded PREFERENCE (decision still open):
+    //   1. PREFERRED: rebuild-by-scanning. The $zl_ ids are already on the
+    //      server; a scan of live keywords reconstructs the mapping without
+    //      adding a second write path that can drift. Same shape as
+    //      driver.get's trash/junk fallback rebuilding thread content.
+    //      (Limitation to solve: the server carries only the slug-derived
+    //      id, so a display name with casing/spacing lost by the slug cannot
+    //      be recovered exactly -- acceptable, or store the name in the
+    //      keyword.)
+    //   2. Mirroring the registry onto IMAP (e.g. $zl_meta_<id>=<name>).
+    //      Rejected as first choice: two stores kept in sync is exactly the
+    //      shape that produced the snooze split-brain.
+    // Neither is implemented; this is the record that the gap exists and was
+    // found on purpose.
     if (resolvedLabelId) {
       const registryKeyLike = `%${mode.email}%`;
       sql(`delete from mail0_imap_label_registry where key like '${registryKeyLike}'`);

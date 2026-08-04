@@ -93,7 +93,37 @@ let imap = null;
 let appendedSubjects = [];
 
 // ------------------------------------------------------------------ plumbing
-const trpc = async (path, { query, mutationBody } = {}) => {
+/**
+ * Transient-failure retry, --real's survival kit.
+ *
+ * On GreenMail every hop is localhost and nothing blips. On --real a single
+ * run makes ~200 network operations (each server() assertion is a fresh TLS
+ * IMAP login; every leg round-trips the api), and this session lost two
+ * consecutive 20-minute runs to two DIFFERENT sub-second blips (a DNS
+ * ENOTFOUND, then one 'fetch failed'). A harness that dies on any one of 200
+ * transients is measuring the network, not the code. Retries are bounded and
+ * logged; a persistent failure still fails.
+ */
+const TRANSIENT = /ENOTFOUND|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EPIPE|fetch failed|Connect Timeout|Socket closed|getaddrinfo|Connection not available/i;
+const withRetry = async (label, fn, attempts = 5) => {
+  let lastError;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastError = e;
+      if (!TRANSIENT.test(e?.message ?? '') || i === attempts) throw e;
+      console.warn(`[e2e] transient on ${label} (attempt ${i}/${attempts}): ${e.message.slice(0, 80)} -- retrying`);
+      // Exponential: 3s,6s,12s,24s -- the DNS failures here arrive as BURSTS
+      // lasting tens of seconds, not single blips; 3 linear retries (~9s)
+      // died inside one.
+      await new Promise((r) => setTimeout(r, 3000 * 2 ** (i - 1)));
+    }
+  }
+  throw lastError;
+};
+
+const trpc = async (path, { query, mutationBody } = {}) => withRetry(`trpc ${path}`, async () => {
   const url = `${APP}/api/trpc/${path}?batch=1${
     query !== undefined ? `&input=${encodeURIComponent(JSON.stringify({ 0: { json: query } }))}` : ''
   }`;
@@ -113,7 +143,7 @@ const trpc = async (path, { query, mutationBody } = {}) => {
   }
   if (parsed[0]?.error) throw new Error(`${path}: ${parsed[0].error.json?.message ?? 'tRPC error'}`);
   return parsed[0]?.result?.data?.json;
-};
+});
 
 const sql = (q) =>
   execSync(
@@ -150,7 +180,7 @@ const rawImap = async () => {
 
 // --------------------------------------------------------------- the 3 levels
 /** (c) SERVER: where the message lives and what flags it carries. */
-const server = async (subject) => {
+const server = async (subject) => withRetry(`server(${subject.slice(-12)})`, async () => {
   const c = await rawImap();
   try {
     for (const path of SEARCH_FOLDERS) {
@@ -174,7 +204,7 @@ const server = async (subject) => {
   } finally {
     await c.logout();
   }
-};
+});
 
 /** (b) INDEX: thread labels and the folder_message ledger. */
 const index = (threadId) => ({
@@ -278,17 +308,43 @@ const assertLevels = async (primitive, control, subject, threadId, want) => {
     want = { ...want, [NEGATIVE_CONTROL_LEVEL]: (x) => !original(x) };
     console.log(`[e2e] NEGATIVE CONTROL: inverted the ${NEGATIVE_CONTROL_LEVEL.toUpperCase()} predicate for the next assertion`);
   }
-  const a = await app(threadId);
-  const b = index(threadId);
-  const c = await server(subject);
-  const checks = [
-    ['app', want.app ? want.app(a) : true, JSON.stringify(a.tags)],
-    ['index', want.index ? want.index(b) : true, JSON.stringify(b.labels)],
-    ['SERVER', want.server ? want.server(c) : true, `${c.folder}:${JSON.stringify(c.flags)}`],
-  ];
-  for (const [level, ok, actual] of checks) {
-    if (want[level === 'SERVER' ? 'server' : level]) {
-      record(primitive, `${control} (${level})`, want.describe ?? 'see predicate', actual, ok);
+  // SERVER: immediate read. The IMAP write IS awaited by the mutation, so
+  // server truth must hold the moment the tRPC call returns -- no grace.
+  if (want.server) {
+    const c = await server(subject);
+    record(
+      primitive,
+      `${control} (SERVER)`,
+      want.describe ?? 'see predicate',
+      `${c.folder}:${JSON.stringify(c.flags)}`,
+      want.server(c),
+    );
+  }
+
+  // INDEX/APP: bounded poll to convergence. The index refresh is a BACKGROUND
+  // CONTINUATION since the latency fix -- the mutation returns before the
+  // re-derivation lands, so an immediate read here is a race, not an
+  // assertion. This does NOT weaken the claim: convergence must arrive within
+  // the deadline or the leg FAILS. (An inverted negative-control predicate
+  // simply polls out the full deadline and then fails, as it should.)
+  if (want.app || want.index) {
+    const deadline = Date.now() + (REAL ? 30_000 : 15_000);
+    let a = await app(threadId);
+    let b = index(threadId);
+    for (;;) {
+      const appOk = want.app ? want.app(a) : true;
+      const idxOk = want.index ? want.index(b) : true;
+      if (appOk && idxOk) break;
+      if (Date.now() > deadline) break;
+      await new Promise((r) => setTimeout(r, 1000));
+      a = await app(threadId);
+      b = index(threadId);
+    }
+    if (want.app) {
+      record(primitive, `${control} (app)`, want.describe ?? 'see predicate', JSON.stringify(a.tags), want.app(a));
+    }
+    if (want.index) {
+      record(primitive, `${control} (index)`, want.describe ?? 'see predicate', JSON.stringify(b.labels), want.index(b));
     }
   }
 };

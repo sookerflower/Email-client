@@ -501,7 +501,48 @@ export class MailEngine {
       }
     }
 
-    // 2. Rebuild the index from server truth.
+    // 2. Rebuild the index from server truth -- as a BACKGROUND CONTINUATION.
+    //
+    // The caller stops waiting HERE. Measured cost of what follows on
+    // localhost alone: getThreadFolders ~280ms + driver.get-backed refresh
+    // ~300ms per thread, all sequential IMAP round-trips -- it pushed every
+    // user action to ~1.1s locally and 1.5-2.5s against the real server,
+    // which users see as a 1-2s lag on every star/read/archive.
+    //
+    // What this does NOT change: the ordering invariant. The IMAP write above
+    // is still first and still awaited (its failure rolls the client back);
+    // the LEDGER update above is still awaited (the vanish path reads it, so
+    // deferring it would reopen the move race item 3 closed); the index is
+    // still rebuilt from what the server reports, never from intent. The only
+    // change is that the CALLER no longer waits for the re-derivation --
+    // which was already the documented failure contract ("index refresh
+    // failure -> next sync converges").
+    //
+    // Un-awaited work that throws is invisible, and an invisible failure here
+    // is exactly the shape that caused the syncThread bare-success race. So
+    // the continuation logs EVERY failure loudly, per thread, with the
+    // operation -- systematic breakage must show in the log, not as
+    // mysterious stale data.
+    void this.refreshIndexAfterLabels(threadIds, addLabels, removeLabels).catch((error) => {
+      console.error(
+        `[MailEngine:${this.connectionId}] applyLabels CONTINUATION FAILED wholesale for [${threadIds.join(',')}] (add=[${addLabels.join(',')}], remove=[${removeLabels.join(',')}]): ${error instanceof Error ? error.message : error}`,
+      );
+    });
+
+    return { success: true as const };
+  }
+
+  /**
+   * The deferred half of applyLabels: read back server truth and rebuild the
+   * index. Runs un-awaited after the IMAP write and ledger update commit.
+   * Broadcasts fire at the END, so clients refetch only once the index is
+   * actually fresh.
+   */
+  private async refreshIndexAfterLabels(
+    threadIds: string[],
+    addLabels: string[],
+    removeLabels: string[],
+  ) {
     const folders = this.driver.getThreadFolders
       ? await this.driver.getThreadFolders(threadIds)
       : {};
@@ -516,7 +557,21 @@ export class MailEngine {
         .concat(addLabels.filter((id) => INDEX_ONLY_LABELS.has(id)));
 
       const extraLabelIds = [...new Set([...serverFolders, ...keptIndexOnly])];
-      const synced = await this.syncThread({ threadId, extraLabelIds });
+      // If a folder sync already has this thread in flight, syncThread
+      // dedup-skips -- and a skipped refresh here means the flags we just
+      // wrote never reach the index (the in-flight sync fetched its flags
+      // before our write). Wait out the in-flight sync and refresh for real;
+      // it clears in seconds.
+      let synced = await this.syncThread({ threadId, extraLabelIds });
+      for (let attempt = 0; synced.skipped && attempt < 10; attempt++) {
+        await new Promise((r) => setTimeout(r, 700));
+        synced = await this.syncThread({ threadId, extraLabelIds });
+      }
+      if (synced.skipped) {
+        console.error(
+          `[MailEngine:${this.connectionId}] applyLabels: sync still in flight for ${threadId} after 10 waits; index refresh deferred to the next folder sync`,
+        );
+      }
 
       // Folder-label reconciliation from server truth, on BOTH branches.
       // upsertThread's folder labels are add-only (each folder's own sync
@@ -541,11 +596,10 @@ export class MailEngine {
         const toAdd = extraLabelIds.filter((id) => !currentLabels.includes(id));
         await this.applyIndexLabelsFromSync(threadId, toAdd, folderLabelsToDrop);
         if (synced.reason !== 'No latest message') {
-          // Server write succeeded; only the index refresh failed. Do not
-          // throw -- the client's optimistic update must roll back only when
-          // the SERVER rejected the mutation. The next sync converges.
+          // Server write succeeded; only the index refresh failed. The next
+          // sync converges -- but say so LOUDLY, per thread.
           console.error(
-            `[MailEngine:${this.connectionId}] applyLabels: index refresh failed for ${threadId} (${synced.reason}); folder labels reconciled, next sync converges`,
+            `[MailEngine:${this.connectionId}] applyLabels continuation: index refresh failed for ${threadId} (add=[${addLabels.join(',')}], remove=[${removeLabels.join(',')}]): ${synced.reason}; folder labels reconciled, next sync converges`,
           );
         }
       }
@@ -556,7 +610,6 @@ export class MailEngine {
     for (const threadId of threadIds) {
       this.broadcast({ type: OutgoingMessageType.Mail_Get, threadId });
     }
-    return { success: true as const };
   }
 
   /**
@@ -663,9 +716,19 @@ export class MailEngine {
     threadId: string;
     reason?: string;
     broadcastSent: boolean;
+    /** True when dedup-skipped because this thread was already mid-sync. */
+    skipped?: boolean;
   }> {
     if (this.syncInProgress.has(threadId)) {
-      return { success: true, threadId, broadcastSent: false };
+      // DEDUP SKIP, and the caller must be able to see it. This used to
+      // return bare success, and applyLabels trusted it: a write-through's
+      // post-write refresh that landed while a folder sync had this thread
+      // in flight would no-op silently -- and the concurrent sync's own
+      // upsert used flags fetched BEFORE the write, so a just-set \Flagged
+      // ended up on the server but never in the index (found live on Dovecot:
+      // star SET passed at SERVER and failed at app+index, nondeterministic
+      // across runs because it is a race with syncFolderOnce).
+      return { success: true, threadId, broadcastSent: false, skipped: true };
     }
     this.syncInProgress.add(threadId);
     try {

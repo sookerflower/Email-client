@@ -69,9 +69,44 @@ export function useOptimisticActions() {
   const generatePendingActionId = () =>
     `pending_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
-  const refreshData = useCallback(async () => {
-    return await queryClient.refetchQueries({ queryKey: trpc.labels.list.queryKey() });
-  }, [queryClient]);
+  /**
+   * Wait until the affected threads' cached data is FRESHER than the
+   * mutation, then refetch labels. Called before the optimistic marker is
+   * removed, because removing it earlier reverts the UI to the stale cache
+   * for however long the refetch takes -- the post-mutation flicker users
+   * reported as latency.
+   *
+   * Freshness arrives via the SSE beacon: the server broadcasts Mail_Get
+   * only after its background index refresh completes, the beacon handler
+   * invalidates, and active queries refetch. This polls dataUpdatedAt until
+   * that lands (bounded), and force-refetches anything still stale at the
+   * deadline (e.g. cached-but-unmounted queries that invalidation alone
+   * never refetches).
+   */
+  const refreshData = useCallback(
+    async (threadIds: string[] = []) => {
+      const startedAt = Date.now();
+      const keyFor = (id: string) => trpc.mail.get.queryKey({ id });
+      const stale = () =>
+        threadIds.filter((id) => {
+          const state = queryClient.getQueryState(keyFor(id));
+          return state && state.dataUpdatedAt < startedAt;
+        });
+
+      const deadline = startedAt + 8000;
+      while (stale().length && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      const leftovers = stale();
+      if (leftovers.length) {
+        await Promise.all(
+          leftovers.map((id) => queryClient.refetchQueries({ queryKey: keyFor(id) })),
+        );
+      }
+      return await queryClient.refetchQueries({ queryKey: trpc.labels.list.queryKey() });
+    },
+    [queryClient],
+  );
 
   function createPendingAction({
     type,
@@ -140,10 +175,12 @@ export function useOptimisticActions() {
 
         optimisticActionsManager.pendingActions.delete(pendingActionId);
         optimisticActionsManager.pendingActionsByType.get(type)?.delete(pendingActionId);
-        if (typeActions?.size === 1) {
-          await refreshData();
-          removeOptimisticAction(optimisticId);
-        }
+        // Always clean up THIS action's marker, and only after the affected
+        // threads' data is fresh. The old guard (size === 1, checked AFTER
+        // the delete) meant a single action -- the common case -- never took
+        // this branch, so markers were only ever cleaned up by accident.
+        await refreshData(threadIds);
+        removeOptimisticAction(optimisticId);
       } catch (error) {
         console.error('Action failed:', error);
         removeOptimisticAction(optimisticId);

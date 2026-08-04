@@ -5,6 +5,7 @@ import type {
   IGetThreadResponse,
   ListParams,
   MailManager,
+  MemberHints,
   MoveReport,
   ManagerConfig,
   ParsedDraft,
@@ -201,8 +202,9 @@ export class ImapSmtpProxyMailManager implements MailManager {
   modifyLabels(
     id: string[],
     options: { addLabels: string[]; removeLabels: string[] },
+    hints?: MemberHints,
   ): Promise<MoveReport> {
-    return this.rpc('modifyLabels', [id, options]);
+    return this.rpc('modifyLabels', [id, options, hints]);
   }
 
   getAttachment(messageId: string, attachmentId: string): Promise<string | undefined> {

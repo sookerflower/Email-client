@@ -12,7 +12,7 @@ import { mapGoogleLabelColor, mapToGoogleLabelColor } from './google-label-color
 import { parseAddressList, parseFrom, wasSentWithTLS } from '../email-utils';
 import type { IOutgoingMessage, Label, ParsedMessage } from '../../types';
 import { sanitizeTipTapHtml } from '../sanitize-tip-tap-html';
-import type { MailManager, ManagerConfig } from './types';
+import type { MailManager, ManagerConfig, MemberHints } from './types';
 import { type gmail_v1, gmail } from '@googleapis/gmail';
 import { OAuth2Client } from 'google-auth-library';
 import type { CreateDraftData } from '../schemas';
@@ -548,10 +548,15 @@ export class GoogleMailManager implements MailManager {
   public modifyLabels(
     threadIds: string[],
     addOrOptions: { addLabels: string[]; removeLabels: string[] } | string[],
-    maybeRemove?: string[],
+    // Legacy (ids, add[], remove[]) call shape; via the MailManager interface
+    // this slot carries the IMAP ledger hints instead, which Gmail ignores.
+    maybeRemove?: string[] | MemberHints,
   ) {
     const options = Array.isArray(addOrOptions)
-      ? { addLabels: addOrOptions as string[], removeLabels: maybeRemove ?? [] }
+      ? {
+          addLabels: addOrOptions as string[],
+          removeLabels: Array.isArray(maybeRemove) ? maybeRemove : [],
+        }
       : addOrOptions;
     return this.withErrorHandler(
       'modifyLabels',

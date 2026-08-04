@@ -275,7 +275,33 @@ const UNREAD_KEYS = keysWhere((f) => !f.flags.includes('\\Seen'));
 const TODAY_UNREAD_KEYS = keysWhere((f) => !f.flags.includes('\\Seen') && f.date === D_TODAY);
 
 // ------------------------------------------------------------------- plumbing
-const trpc = async (path, { query, mutationBody } = {}) => {
+/**
+ * Transient-failure retry, ported from e2e-action-matrix.mjs (--real's
+ * survival kit). A --real run makes hundreds of network operations; this
+ * session's action-matrix history lost two consecutive 20-minute runs to two
+ * DIFFERENT sub-second blips (DNS ENOTFOUND burst, one 'fetch failed'). A
+ * harness that dies on any one transient is measuring the network, not the
+ * code. Retries are bounded and logged; a persistent failure still fails.
+ */
+const TRANSIENT = /ENOTFOUND|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EPIPE|fetch failed|Connect Timeout|Socket closed|getaddrinfo|Connection not available/i;
+const withRetry = async (label, fn, attempts = 5) => {
+  let lastError;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastError = e;
+      if (!TRANSIENT.test(e?.message ?? '') || i === attempts) throw e;
+      console.warn(`[e2e] transient on ${label} (attempt ${i}/${attempts}): ${e.message.slice(0, 80)} -- retrying`);
+      // Exponential: 3s,6s,12s,24s -- DNS failures arrive as BURSTS lasting
+      // tens of seconds, not single blips.
+      await new Promise((r) => setTimeout(r, 3000 * 2 ** (i - 1)));
+    }
+  }
+  throw lastError;
+};
+
+const trpc = async (path, { query, mutationBody } = {}) => withRetry(`trpc ${path}`, async () => {
   const url = `${APP}/api/trpc/${path}?batch=1${
     query ? `&input=${encodeURIComponent(JSON.stringify({ 0: { json: query } }))}` : ''
   }`;
@@ -296,7 +322,7 @@ const trpc = async (path, { query, mutationBody } = {}) => {
   const item = parsed[0];
   if (item?.error) throw new Error(`${path}: ${item.error.json?.message ?? 'tRPC error'}`);
   return item?.result?.data?.json;
-};
+});
 
 const rawImap = async () => {
   const { ImapFlow } = await import('imapflow');
@@ -774,7 +800,7 @@ if (ok) {
   // moves have now been independently verified for and this had not. A red
   // here is a real finding, not a harness artifact.
   const labelledSubject = byKeySubject('labelled');
-  const keywordOnServer = async () => {
+  const keywordOnServer = async () => withRetry('keywordOnServer', async () => {
     const c = await rawImap();
     try {
       const lock = await c.getMailboxLock('INBOX');
@@ -789,7 +815,7 @@ if (ok) {
     } finally {
       await c.logout();
     }
-  };
+  });
 
   try {
     const before = await keywordOnServer();

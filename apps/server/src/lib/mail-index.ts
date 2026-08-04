@@ -443,6 +443,89 @@ export const getFolderLedger = async (
   return rows;
 };
 
+/**
+ * Ledger rows for a set of threads, across all folders (item C). Feeds
+ * MailEngine.buildMemberHints; covered by folder_message_thread_idx.
+ */
+export const getLedgerRowsForThreads = async (
+  connectionId: string,
+  threadIds: string[],
+): Promise<{ folder: string; uid: number; threadId: string }[]> => {
+  if (!threadIds.length) return [];
+  return await db()
+    .select({
+      folder: folderMessage.folder,
+      uid: folderMessage.uid,
+      threadId: folderMessage.threadId,
+    })
+    .from(folderMessage)
+    .where(
+      and(
+        eq(folderMessage.connectionId, connectionId),
+        inArray(folderMessage.threadId, threadIds),
+      ),
+    );
+};
+
+/**
+ * UIDVALIDITY per synced folder (item C). Only folders a sync has recorded a
+ * validity for appear here -- rows in any other folder have no validity
+ * anchor and must not be trusted for direct STOREs.
+ */
+export const getFolderValidities = async (
+  connectionId: string,
+): Promise<Record<string, number>> => {
+  const rows = await db()
+    .select({ folder: folderSyncState.folder, uidValidity: folderSyncState.uidValidity })
+    .from(folderSyncState)
+    .where(eq(folderSyncState.connectionId, connectionId));
+  const out: Record<string, number> = {};
+  for (const r of rows) if (r.uidValidity != null) out[r.folder] = Number(r.uidValidity);
+  return out;
+};
+
+/** Drop ledger rows the driver PROVED wrong (uid gone, or validity changed). */
+export const deleteLedgerRows = async (
+  connectionId: string,
+  rows: { folder: string; uid: number }[],
+): Promise<void> => {
+  for (const row of rows) {
+    await db()
+      .delete(folderMessage)
+      .where(
+        and(
+          eq(folderMessage.connectionId, connectionId),
+          eq(folderMessage.folder, row.folder),
+          eq(folderMessage.uid, row.uid),
+        ),
+      );
+  }
+};
+
+/**
+ * Re-seed rows the search fallback discovered, so the NEXT action on the
+ * thread takes the ledger path again. Insert-only on purpose: an existing
+ * row carries sync-derived flags this caller does not know and must not
+ * clobber (the flags column is sync-owned; '' converges on the next sync).
+ */
+export const insertLedgerRowsIfAbsent = async (
+  connectionId: string,
+  rows: { folder: string; uid: number; threadId: string }[],
+): Promise<void> => {
+  for (const row of rows) {
+    await db()
+      .insert(folderMessage)
+      .values({
+        connectionId,
+        folder: row.folder,
+        uid: row.uid,
+        threadId: row.threadId,
+        flags: '',
+      })
+      .onConflictDoNothing();
+  }
+};
+
 /** Wholesale ledger replacement after a full sync's snapshot. */
 export const replaceFolderLedger = async (
   connectionId: string,

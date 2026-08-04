@@ -148,6 +148,53 @@ export interface FolderDelta {
  */
 export interface MoveReport {
   moves: { from: string; to: string; uidMap: [number, number][] }[];
+  /** How thread members were resolved (item C). Absent from the Gmail driver. */
+  resolution?: ResolutionReport;
+}
+
+/**
+ * Ledger-derived member hints for modifyLabels (item C).
+ *
+ * The folder_message ledger maps thread -> (folder, uid) in ~1ms of Postgres,
+ * where the driver's reference-header search costs a WAN round trip per
+ * folder kind. The engine passes the ledger's view in; the driver acts on it
+ * directly -- but the ledger can be WRONG, not just absent (window-bounded,
+ * and a message can have moved since the row was written), so the driver
+ * VERIFIES every hinted operation against the server's response and falls
+ * back to the full search per thread when the hints don't hold.
+ */
+export interface MemberHints {
+  /**
+   * Per-thread ledger rows. `folder` is the LEDGER's app folder key
+   * ('inbox', 'sent', 'archive', 'spam', 'trash') -- never an IMAP path.
+   * The engine only includes a thread when the ledger fully accounts for
+   * the index's view of it; a missing key means "resolve by search".
+   */
+  threads: Record<string, { folder: string; uid: number }[]>;
+  /**
+   * Ledger folder key -> UIDVALIDITY recorded by that folder's last sync.
+   * Rows in folders absent here have no validity anchor and must not be
+   * trusted for direct STOREs (a validity change silently re-points uids
+   * at different messages).
+   */
+  validity: Record<string, number>;
+}
+
+/**
+ * How modifyLabels resolved thread members, reported so the caller can
+ * (a) repair the ledger from what verification proved, and (b) assert in
+ * tests that the fallback actually FIRED -- a fallback that never triggers
+ * is indistinguishable from one that does by end state alone.
+ */
+export interface ResolutionReport {
+  /** 'ledger' = every thread from hints; 'search' = none; 'mixed' = some fell back. */
+  mode: 'ledger' | 'search' | 'mixed';
+  /** Threads that took the full IMAP-search fallback, with the condition that fired. */
+  fallback: { threadId: string; reason: string }[];
+  /** Hinted rows proven wrong (uid absent, or folder validity changed): drop them. */
+  staleRows: { folder: string; uid: number }[];
+  /** Members the fallback found in validity-anchored folders: safe to re-seed. */
+  discovered: { threadId: string; folder: string; uid: number }[];
 }
 
 export interface ListParams {
@@ -223,6 +270,8 @@ export interface MailManager {
   modifyLabels(
     id: string[],
     options: { addLabels: string[]; removeLabels: string[] },
+    /** Optional ledger hints (item C); implementations may ignore them. */
+    hints?: MemberHints,
   ): Promise<MoveReport | void>;
   getAttachment(messageId: string, attachmentId: string): Promise<string | undefined>;
   getUserLabels(): Promise<Label[]>;

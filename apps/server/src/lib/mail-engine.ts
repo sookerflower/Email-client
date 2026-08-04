@@ -23,6 +23,10 @@ import {
   clearFolderLedger,
   clearFolderSyncData,
   moveLedgerEntry,
+  getLedgerRowsForThreads,
+  getFolderValidities,
+  deleteLedgerRows,
+  insertLedgerRowsIfAbsent,
   type IndexLabel,
 } from './mail-index';
 import { generateWhatUserCaresAbout, type UserTopic } from './analyze/interests';
@@ -75,7 +79,13 @@ import { generateWhatUserCaresAbout, type UserTopic } from './analyze/interests'
  */
 const INDEX_ONLY_LABELS = new Set(['SNOOZED']);
 import { redis } from './services';
-import type { IGetThreadResponse, IGetThreadsResponse, MailManager } from './driver/types';
+import type {
+  IGetThreadResponse,
+  IGetThreadsResponse,
+  MailManager,
+  MemberHints,
+  MoveReport,
+} from './driver/types';
 import type { ParsedMessage } from '../types';
 import { getThreadBlobStore, threadBlobKey } from './blob-store';
 import { publishBeacon } from './beacons';
@@ -486,10 +496,18 @@ export class MailEngine {
   async applyLabels(threadIds: string[], addLabels: string[], removeLabels: string[]) {
     if (!threadIds.length) return { success: false as const, error: 'no thread ids' };
 
+    // 0. Ledger hints (item C): hand the driver the folder_message view of
+    // these threads so it can STORE/MOVE at known uids instead of paying a
+    // WAN search per folder kind. The driver VERIFIES the hints against the
+    // server and falls back per thread when they don't hold.
+    const hints = await this.buildMemberHints(threadIds);
+
     // 1. Server first. Any driver/IMAP failure throws out of here.
-    const report = (await this.driver.modifyLabels(threadIds, { addLabels, removeLabels })) as
-      | { moves: { from: string; to: string; uidMap: [number, number][] }[] }
-      | undefined;
+    const report = (await this.driver.modifyLabels(
+      threadIds,
+      { addLabels, removeLabels },
+      hints,
+    )) as MoveReport | undefined;
 
     // 1b. A MOVE assigns a NEW uid in the destination and expunges the source,
     // so the folder_message ledger has to follow it or it holds a uid that no
@@ -498,6 +516,33 @@ export class MailEngine {
     for (const move of report?.moves ?? []) {
       for (const [sourceUid, destUid] of move.uidMap) {
         await moveLedgerEntry(this.connectionId, move.from, sourceUid, move.to, destUid);
+      }
+    }
+
+    // 1c. Ledger repair from the driver's verification (item C). Rows PROVEN
+    // wrong go away now, not at the next sync; members the fallback found in
+    // validity-anchored folders are re-seeded. Without the re-seed, one
+    // external move would make every later action on the thread pay the
+    // search cost until a sync happened to correct the ledger. Awaited for
+    // the same reason the move-follow above is: vanish processing reads the
+    // ledger, and a deferred repair reopens that race.
+    const resolution = report?.resolution;
+    if (resolution) {
+      if (resolution.fallback.length) {
+        // Loud on purpose: a fallback that fires constantly means the ledger
+        // is systematically wrong, and that must show in the log, not as a
+        // silent latency regression.
+        console.warn(
+          `[MailEngine:${this.connectionId}] modifyLabels ledger fallback (${resolution.mode}) for ${resolution.fallback
+            .map((f) => `${f.threadId}(${f.reason})`)
+            .join(', ')} (add=[${addLabels.join(',')}], remove=[${removeLabels.join(',')}])`,
+        );
+      }
+      if (resolution.staleRows.length) {
+        await deleteLedgerRows(this.connectionId, resolution.staleRows);
+      }
+      if (resolution.discovered.length) {
+        await insertLedgerRowsIfAbsent(this.connectionId, resolution.discovered);
       }
     }
 
@@ -529,7 +574,74 @@ export class MailEngine {
       );
     });
 
-    return { success: true as const };
+    // `resolution` rides along so tests can assert HOW members were resolved
+    // -- a fallback that never fires is indistinguishable from one that does
+    // by end state alone.
+    return { success: true as const, resolution };
+  }
+
+  /**
+   * Ledger-derived member hints for driver.modifyLabels (item C).
+   *
+   * The awaited cost of every user action used to be resolveThreadMembers
+   * searching six folder kinds over the WAN (~12 round trips against the
+   * real server). folder_message already maps thread -> (folder, uid) in
+   * ~1ms of Postgres, so hand the driver those uids -- but only where the
+   * ledger can be held to account:
+   *
+   *   - a thread is included only when the ledger fully accounts for the
+   *     index's own view of it (every blob message has a row, no drafts --
+   *     drafts are never ledgered). A partially-covered thread would
+   *     silently act on SOME members, which is worse than being slow;
+   *   - rows are only usable in folders whose UIDVALIDITY is on record
+   *     (synced folders: inbox and sent today). Rows this engine wrote by
+   *     following its own moves into never-synced folders (trash/spam/
+   *     archive) have no validity anchor and no sync ever corrects them,
+   *     so those threads deliberately keep the search path;
+   *   - the driver re-verifies everything live (folder validity + per-uid
+   *     existence, from the STORE/MOVE responses) and reports what was
+   *     wrong, so applyLabels can repair the ledger (see step 1c).
+   *
+   * Returns undefined for oversized batches: bulk actions are not the
+   * latency-sensitive path, and the per-thread blob reads are not free.
+   * Never throws -- hints are an optimization, not a dependency.
+   */
+  private async buildMemberHints(threadIds: string[]): Promise<MemberHints | undefined> {
+    if (threadIds.length === 0 || threadIds.length > 20) return undefined;
+    try {
+      const validity = await getFolderValidities(this.connectionId);
+      const rows = await getLedgerRowsForThreads(this.connectionId, threadIds);
+      const byThread = new Map<string, { folder: string; uid: number }[]>();
+      for (const r of rows) {
+        let list = byThread.get(r.threadId);
+        if (!list) byThread.set(r.threadId, (list = []));
+        list.push({ folder: r.folder, uid: r.uid });
+      }
+
+      const threads: MemberHints['threads'] = {};
+      for (const tid of threadIds) {
+        const list = byThread.get(tid);
+        if (!list?.length) continue;
+        if (!list.every((r) => validity[r.folder] != null)) continue;
+        const blob = await getThreadBlobStore().get(threadBlobKey(this.connectionId, tid));
+        if (!blob) continue;
+        let messages: { isDraft?: boolean }[];
+        try {
+          messages = (JSON.parse(blob) as IGetThreadResponse).messages ?? [];
+        } catch {
+          continue;
+        }
+        if (messages.some((m) => m.isDraft === true)) continue;
+        if (list.length < messages.length) continue;
+        threads[tid] = list;
+      }
+      return { threads, validity };
+    } catch (error) {
+      console.warn(
+        `[MailEngine:${this.connectionId}] buildMemberHints failed (falling back to search): ${error instanceof Error ? error.message : error}`,
+      );
+      return undefined;
+    }
   }
 
   /**

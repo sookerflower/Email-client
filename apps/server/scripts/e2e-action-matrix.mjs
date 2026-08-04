@@ -714,6 +714,127 @@ if (ok && !fatal) {
   }
 }
 
+// ---------------------------------------------------------------- PRIMITIVE 5
+// stale ledger -> verified fallback (item C, ledger-first member resolution).
+//
+// The ledger can be WRONG, not just absent: it is window-bounded and a
+// message can have moved since its row was written. This section proves the
+// four properties that make ledger-first safe to ship:
+//   (a) a healthy thread actually TAKES the ledger fast path (else the
+//       latency win is fiction and nothing would notice);
+//   (b) a deliberately-staled row is DETECTED, not trusted -- staled via an
+//       INDEPENDENT IMAP session so the app never learns of the move;
+//   (c) the flag still lands on the RIGHT message, and the resolution report
+//       says the fallback FIRED -- end state alone cannot distinguish a
+//       fallback that triggered from one that never runs;
+//   (d) the ledger is REPAIRED from the fallback's discovery, so one external
+//       move costs exactly ONE fallback, not a permanent slow path.
+if (ok && !fatal) {
+  const subject = S('Stale');
+  let tid = null;
+  const seeded = await hardLeg('seed:stale-ledger', async () => {
+    await seed(subject, 7);
+    await trpc('mail.forceSync', { mutationBody: null });
+    tid = await findThread(subject);
+    return tid;
+  });
+
+  if (seeded) {
+    // (a) Control: fresh, fully-ledgered thread -> ledger path, no fallback.
+    const r0 = await trpc('mail.modifyLabels', {
+      mutationBody: { threadId: [tid], addLabels: ['STARRED'], removeLabels: [] },
+    });
+    record(
+      'stale-ledger',
+      'healthy thread takes the ledger fast path',
+      "resolution.mode === 'ledger', no fallback",
+      JSON.stringify(r0?.resolution ?? null),
+      r0?.resolution?.mode === 'ledger' && (r0?.resolution?.fallback ?? []).length === 0,
+      'Pre-fix builds return no resolution field at all, so this leg is RED against them by design.',
+    );
+    await trpc('mail.modifyLabels', {
+      mutationBody: { threadId: [tid], addLabels: [], removeLabels: ['STARRED'] },
+    });
+    await new Promise((r) => setTimeout(r, 1500));
+
+    // (b) STALE the ledger: move the message out of INBOX and straight back
+    // via the independent session. It returns to INBOX under a NEW uid; the
+    // app saw none of it, so its ledger still holds the old one. Act
+    // IMMEDIATELY afterwards -- before the IDLE watcher's sync can correct
+    // the ledger -- so the driver must catch the stale uid itself. (If the
+    // sync ever wins this race the assertion below fails with mode='ledger',
+    // which is the signal to widen the staleness window, not a code bug.)
+    const before = await server(subject);
+    {
+      const lock = await imap.getMailboxLock('INBOX');
+      try {
+        try {
+          await imap.mailboxCreate('Archive');
+        } catch {
+          /* already exists */
+        }
+        await imap.messageMove(String(before.uid), 'Archive', { uid: true });
+      } finally {
+        lock.release();
+      }
+      const lock2 = await imap.getMailboxLock('Archive');
+      try {
+        const uids = (await imap.search({ header: { subject } }, { uid: true })) || [];
+        if (!uids.length) throw new Error('stale-ledger: fixture vanished during the way-station move');
+        await imap.messageMove(uids.join(','), 'INBOX', { uid: true });
+      } finally {
+        lock2.release();
+      }
+    }
+    const r1 = await trpc('mail.modifyLabels', {
+      mutationBody: { threadId: [tid], addLabels: ['STARRED'], removeLabels: [] },
+    });
+    const after = await server(subject);
+    const fb = (r1?.resolution?.fallback ?? []).find((f) => f.threadId === tid);
+    record(
+      'stale-ledger',
+      'stale uid DETECTED, fallback FIRED',
+      `fallback for this thread, reason uid-missing`,
+      fb ? `fired (${fb.reason})` : `no fallback (mode=${r1?.resolution?.mode ?? 'missing'})`,
+      !!fb && fb.reason === 'uid-missing',
+      'The STORE response accounts for zero of the hinted uids; that must condemn the thread to the search path, never be trusted silently.',
+    );
+    record(
+      'stale-ledger',
+      'flag landed on the RIGHT message (SERVER)',
+      `INBOX, new uid (was ${before.uid}), \\Flagged set`,
+      `${after.folder}:${after.uid}:${JSON.stringify(after.flags)}`,
+      after.exists &&
+        after.folder === 'INBOX' &&
+        after.uid !== before.uid &&
+        after.flags.includes('\\Flagged'),
+      'A STORE at the stale uid flags nothing; only the fallback search can find the post-move uid.',
+    );
+    // (d) Repair is AWAITED by the mutation, so read the ledger immediately.
+    const led = index(tid).ledger;
+    record(
+      'stale-ledger',
+      'ledger repaired from the fallback discovery (index)',
+      `inbox|${after.uid} present, inbox|${before.uid} gone`,
+      led.join(' ') || '(none)',
+      led.includes(`inbox|${after.uid}`) && !led.includes(`inbox|${before.uid}`),
+      'Stale row dropped and discovered row re-seeded by applyLabels step 1c.',
+    );
+    const r2 = await trpc('mail.modifyLabels', {
+      mutationBody: { threadId: [tid], addLabels: [], removeLabels: ['STARRED'] },
+    });
+    record(
+      'stale-ledger',
+      'next action returns to the ledger fast path',
+      "resolution.mode === 'ledger', no fallback",
+      JSON.stringify(r2?.resolution ?? null),
+      r2?.resolution?.mode === 'ledger' && (r2?.resolution?.fallback ?? []).length === 0,
+      'One external move must cost exactly ONE fallback.',
+    );
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+}
+
 // ---------------------------------------------------------------- PRIMITIVE 4
 // permanent delete -- EXPUNGE, guarded. mail.delete on a thread NOT in Trash
 // must MOVE it there; only from Trash does it destroy.

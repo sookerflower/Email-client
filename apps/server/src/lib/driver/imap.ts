@@ -10,7 +10,9 @@ import type {
   MailManager,
   ManagerConfig,
   ImapSmtpAuthConfig,
+  MemberHints,
   ParsedDraft,
+  ResolutionReport,
 } from './types';
 import type { IOutgoingMessage, Label, ParsedMessage, DeleteAllSpamResponse } from '../../types';
 import { simpleParser, type AddressObject, type ParsedMail } from 'mailparser';
@@ -1137,9 +1139,25 @@ export class ImapSmtpMailManager implements MailManager {
     threadIds: string[],
     kinds: FolderKind[] = THREAD_MEMBER_FOLDERS,
   ): Promise<Map<string, number[]>> {
+    const attributed = await this.searchThreadMembersAttributed(threadIds, kinds);
+    return new Map(
+      [...attributed].map(([folder, entries]) => [folder, entries.map((e) => e.uid)]),
+    );
+  }
+
+  /**
+   * The reference-header member search, keeping WHICH thread each uid belongs
+   * to. The ledger-first path (item C) needs the attribution: a fallback's
+   * discoveries are reported per thread so the caller can re-seed the ledger,
+   * and a uid that overlaps two searched threads is attributed to the first.
+   */
+  private async searchThreadMembersAttributed(
+    threadIds: string[],
+    kinds: FolderKind[] = THREAD_MEMBER_FOLDERS,
+  ): Promise<Map<string, { uid: number; threadId: string }[]>> {
     const client = await this.connect();
-    const byFolder = new Map<string, number[]>();
-    const rootIds = threadIds.map((id) => decodeThreadId(id));
+    const byFolder = new Map<string, { uid: number; threadId: string }[]>();
+    const roots = threadIds.map((id) => ({ threadId: id, rootId: decodeThreadId(id) }));
 
     for (const kind of kinds) {
       const path = await this.resolveFolder(kind);
@@ -1150,11 +1168,11 @@ export class ImapSmtpMailManager implements MailManager {
       } catch {
         continue;
       }
-      const uids = new Set<number>();
-      for (const rootId of rootIds) {
+      const seen = new Map<number, string>();
+      for (const { threadId, rootId } of roots) {
         const synthetic = decodeMessageId(rootId);
         if (synthetic && synthetic.folder === path) {
-          uids.add(synthetic.uid);
+          if (!seen.has(synthetic.uid)) seen.set(synthetic.uid, threadId);
         } else if (!synthetic) {
           const found =
             (await client.search(
@@ -1167,10 +1185,17 @@ export class ImapSmtpMailManager implements MailManager {
               },
               { uid: true },
             )) || [];
-          found.forEach((u) => uids.add(u));
+          for (const u of found) if (!seen.has(u)) seen.set(u, threadId);
         }
       }
-      if (uids.size > 0) byFolder.set(path, [...uids].sort((a, b) => a - b));
+      if (seen.size > 0) {
+        byFolder.set(
+          path,
+          [...seen.entries()]
+            .sort((a, b) => a[0] - b[0])
+            .map(([uid, threadId]) => ({ uid, threadId })),
+        );
+      }
     }
     return byFolder;
   }
@@ -1593,7 +1618,11 @@ export class ImapSmtpMailManager implements MailManager {
     );
   }
 
-  public modifyLabels(ids: string[], options: { addLabels: string[]; removeLabels: string[] }) {
+  public modifyLabels(
+    ids: string[],
+    options: { addLabels: string[]; removeLabels: string[] },
+    hints?: MemberHints,
+  ) {
     return this.withErrorHandler(
       'modifyLabels',
       async () => {
@@ -1601,6 +1630,104 @@ export class ImapSmtpMailManager implements MailManager {
         const add = new Set(options.addLabels ?? []);
         const remove = new Set(options.removeLabels ?? []);
         const client = await this.connect();
+
+        // --- Ledger-first member resolution (item C) --------------------
+        //
+        // The ledger can be WRONG, not just absent: it is window-bounded,
+        // and a message can have moved since its row was written. A STORE
+        // at a stale uid silently affects nothing -- or, after a UIDVALIDITY
+        // change, the WRONG message. So hinted operations are VERIFIED
+        // against what the server's responses actually report, and a thread
+        // falls back to the full reference-header search when any of three
+        // conditions fires:
+        //   (1) the hints carry no rows for it;
+        //   (2) the operation's response accounts for fewer uids than
+        //       expected (MOVE: the UIDPLUS uidMap; STORE: the untagged
+        //       FETCH responses the non-SILENT variant already returns);
+        //   (3) a hinted uid provably does not exist in its folder, or the
+        //       folder's live UIDVALIDITY differs from the recorded one --
+        //       which voids every row keyed under it.
+        // Verification prefers what the response already carries; the only
+        // extra round trip is a UID SEARCH when a STORE is ambiguous (an
+        // unreported uid is either already-in-desired-state or nonexistent,
+        // and the response cannot distinguish those).
+        const resolution: ResolutionReport = {
+          mode: 'search',
+          fallback: [],
+          staleRows: [],
+          discovered: [],
+        };
+        // threadId -> first fallback reason. Once condemned, ALL of a
+        // thread's remaining operations use the search path.
+        const condemned = new Map<string, string>();
+        const condemn = (tid: string, reason: string) => {
+          if (!condemned.has(tid)) condemned.set(tid, reason);
+        };
+        const hinted = new Map<string, { folder: string; uid: number }[]>();
+        for (const tid of threadIds) {
+          const rows = hints?.threads[tid];
+          if (rows?.length) hinted.set(tid, rows);
+          else condemn(tid, hints ? 'no-ledger-rows' : 'no-hints');
+        }
+
+        // Canonical ledger folder keys are the APP names ('spam', not the
+        // IMAP kind 'junk') -- the same convention syncFolderJob's folder
+        // argument uses, so a future spam sync job cannot recreate the
+        // path/kind mismatch under a different name.
+        const asLedgerKey = (k: string) => (k === 'junk' ? 'spam' : k);
+        const kindOfLedgerKey = (key: string): FolderKind =>
+          key === 'spam' ? 'junk' : (key as FolderKind);
+
+        /** Usable hint rows grouped by ledger folder key, limited to a kind scope. */
+        const hintPlan = (scope: FolderKind[]) => {
+          const scopeKeys = new Set(scope.map(asLedgerKey));
+          const plan = new Map<string, { uid: number; threadId: string }[]>();
+          for (const [tid, rows] of hinted) {
+            if (condemned.has(tid)) continue;
+            for (const row of rows) {
+              if (!scopeKeys.has(row.folder)) continue;
+              let list = plan.get(row.folder);
+              if (!list) plan.set(row.folder, (list = []));
+              list.push({ uid: row.uid, threadId: tid });
+            }
+          }
+          return plan;
+        };
+
+        /**
+         * Open a hinted folder and hold its rows to condition (3)'s validity
+         * half. Returns the IMAP path, or null when the rows must not be
+         * used (the per-entry consequences are applied here).
+         */
+        const openHintedFolder = async (
+          ledgerKey: string,
+          entries: { uid: number; threadId: string }[],
+        ): Promise<string | null> => {
+          const path = await this.resolveFolder(kindOfLedgerKey(ledgerKey));
+          if (!path) {
+            for (const e of entries) condemn(e.threadId, 'folder-missing');
+            return null;
+          }
+          const mailbox = await client.mailboxOpen(path);
+          const expected = hints?.validity[ledgerKey];
+          if (expected == null) {
+            // No validity anchor (never-synced folder): the rows are not
+            // PROVEN wrong, so they are not reported stale -- just unusable.
+            for (const e of entries) condemn(e.threadId, 'validity-unknown');
+            return null;
+          }
+          if (Number(mailbox.uidValidity) !== expected) {
+            // Every row keyed under the old validity is garbage. Report them
+            // so the caller drops them now; the 6.1 guard would purge them
+            // on the next sync anyway -- this just refuses to act on them.
+            for (const e of entries) {
+              resolution.staleRows.push({ folder: ledgerKey, uid: e.uid });
+              condemn(e.threadId, 'validity-changed');
+            }
+            return null;
+          }
+          return path;
+        };
 
         // --- Moves (system folders are locations on IMAP, not tags) -----
         let moveTarget: FolderKind | undefined;
@@ -1613,25 +1740,25 @@ export class ImapSmtpMailManager implements MailManager {
         // so the caller's ledger must follow it. Both servers advertise
         // UIDPLUS, so messageMove hands back a source->destination uid map --
         // report it rather than making the caller re-fetch and infer.
-        //
-        // Folders are reported as app KINDS ('inbox', 'trash'), normalized
-        // HERE at the boundary, because that is what the folder_message
-        // ledger keys on. The first execution of this path shipped raw IMAP
-        // paths ('INBOX', 'Trash'); moveLedgerEntry looked up by path, missed
-        // silently, and the ledger lost the row instead of following the
-        // move. IMAP paths must not leak past this method.
+        // (Folder keys in `moves` are ledger keys; see asLedgerKey above.)
         const moves: { from: string; to: string; uidMap: [number, number][] }[] = [];
+        // (ledgerKey:sourceUid) -> where a message THIS call moved landed, so
+        // the flag pass can follow our own move instead of re-searching.
+        const movedTo = new Map<string, { folder: string; uid: number; threadId: string }>();
 
         if (moveTarget) {
           const sourceKinds: FolderKind[] = (
             ['inbox', 'archive', 'junk', 'trash'] as FolderKind[]
           ).filter((k) => k !== moveTarget);
-          const members = await this.resolveThreadMembers(threadIds, sourceKinds);
+          const targetLedgerKey = asLedgerKey(moveTarget);
           const targetPath = await this.resolveFolder(moveTarget, true);
           if (targetPath) {
-            for (const [folder, uids] of members) {
-              if (folder === targetPath) continue;
-              await client.mailboxOpen(folder);
+            /** Move one folder's uids and record the UIDPLUS report. */
+            const doMove = async (
+              fromKey: string,
+              entries: { uid: number; threadId: string }[],
+            ) => {
+              const uids = [...new Set(entries.map((e) => e.uid))].sort((a, b) => a - b);
               const res = await client.messageMove(uids.join(','), targetPath, { uid: true });
               // messageMove returns `false` when the server declines; only a
               // UIDPLUS-capable success carries uidMap.
@@ -1639,16 +1766,72 @@ export class ImapSmtpMailManager implements MailManager {
                 res && typeof res !== 'boolean' && res.uidMap
                   ? [...(res.uidMap as Map<number, number>).entries()]
                   : [];
-              // Canonical ledger folder keys are the APP names ('spam', not
-              // the IMAP kind 'junk') -- the same convention syncFolderJob's
-              // folder argument uses, so a future spam sync job cannot
-              // recreate the path/kind mismatch under a different name.
-              const asLedgerKey = (k: string) => (k === 'junk' ? 'spam' : k);
-              moves.push({
-                from: asLedgerKey(this.getFolderKind(folder) ?? folder.toLowerCase()),
-                to: asLedgerKey(moveTarget),
-                uidMap,
-              });
+              moves.push({ from: fromKey, to: targetLedgerKey, uidMap });
+              const byUid = new Map(entries.map((e) => [e.uid, e]));
+              // Destination validity, straight from COPYUID: only re-seed
+              // the ledger when it matches the recorded one, else the rows
+              // would be keyed under a validity the next sync will purge.
+              const destValidity =
+                res && typeof res !== 'boolean' && res.uidValidity != null
+                  ? Number(res.uidValidity)
+                  : null;
+              const destTrusted =
+                destValidity != null && hints?.validity[targetLedgerKey] === destValidity;
+              for (const [source, dest] of uidMap) {
+                const entry = byUid.get(source);
+                if (!entry) continue;
+                movedTo.set(`${fromKey}:${source}`, {
+                  folder: targetLedgerKey,
+                  uid: dest,
+                  threadId: entry.threadId,
+                });
+              }
+              return { declined: res === false, uidMap, destTrusted };
+            };
+
+            // Ledger-first pass.
+            for (const [ledgerKey, entries] of hintPlan(sourceKinds)) {
+              const path = await openHintedFolder(ledgerKey, entries);
+              if (!path || path === targetPath) continue;
+              const { declined, uidMap } = await doMove(ledgerKey, entries);
+              // A declined MOVE is a command failure, not a uid discrepancy;
+              // same contract as the search path (empty uidMap recorded).
+              if (declined) continue;
+              // Condition (2): UIDPLUS names exactly which source uids moved.
+              const movedSources = new Set(uidMap.map(([s]) => s));
+              for (const e of entries) {
+                if (!movedSources.has(e.uid)) {
+                  resolution.staleRows.push({ folder: ledgerKey, uid: e.uid });
+                  condemn(e.threadId, 'uid-missing');
+                }
+              }
+            }
+
+            // Search fallback for condemned threads.
+            const fallbackTids = [...condemned.keys()];
+            if (fallbackTids.length) {
+              const members = await this.searchThreadMembersAttributed(
+                fallbackTids,
+                sourceKinds,
+              );
+              for (const [folder, entries] of members) {
+                if (folder === targetPath) continue;
+                await client.mailboxOpen(folder);
+                const fromKey = asLedgerKey(this.getFolderKind(folder) ?? folder.toLowerCase());
+                const { uidMap, destTrusted } = await doMove(fromKey, entries);
+                if (destTrusted) {
+                  const byUid = new Map(entries.map((e) => [e.uid, e]));
+                  for (const [source, dest] of uidMap) {
+                    const entry = byUid.get(source);
+                    if (!entry) continue;
+                    resolution.discovered.push({
+                      threadId: entry.threadId,
+                      folder: targetLedgerKey,
+                      uid: dest,
+                    });
+                  }
+                }
+              }
             }
           }
         }
@@ -1685,22 +1868,127 @@ export class ImapSmtpMailManager implements MailManager {
           // found live by the action matrix chaining move-then-flag on one
           // thread: the keyword never reached the server because by the time
           // it ran, the message had already moved to Trash.
-          const members = await this.resolveThreadMembers(threadIds, [
-            ...THREAD_MEMBER_FOLDERS,
-            'trash',
-            'junk',
-          ]);
-          for (const [folder, uids] of members) {
-            await client.mailboxOpen(folder);
-            const range = uids.join(',');
+          const scope: FolderKind[] = [...THREAD_MEMBER_FOLDERS, 'trash', 'junk'];
+
+          /** STORE the ops at a uid range in the CURRENTLY OPEN folder. */
+          const storeFlags = async (range: string) => {
             if (flagOps.addFlags.length > 0)
               await client.messageFlagsAdd(range, flagOps.addFlags, { uid: true });
             if (flagOps.removeFlags.length > 0)
               await client.messageFlagsRemove(range, flagOps.removeFlags, { uid: true });
+          };
+
+          // Ledger-first pass, following any move THIS call just performed:
+          // a hinted (folder, uid) that doMove relocated is rewritten to its
+          // COPYUID destination, which is fresher than any ledger row.
+          const rewritten = new Map<
+            string,
+            { uid: number; threadId: string; fresh: boolean }[]
+          >();
+          for (const [ledgerKey, entries] of hintPlan(scope)) {
+            for (const e of entries) {
+              const moved = movedTo.get(`${ledgerKey}:${e.uid}`);
+              const dest = moved
+                ? { key: moved.folder, uid: moved.uid, fresh: true }
+                : { key: ledgerKey, uid: e.uid, fresh: false };
+              let list = rewritten.get(dest.key);
+              if (!list) rewritten.set(dest.key, (list = []));
+              list.push({ uid: dest.uid, threadId: e.threadId, fresh: dest.fresh });
+            }
+          }
+
+          for (const [ledgerKey, entries] of rewritten) {
+            // Fresh (just-moved) uids came from COPYUID seconds ago and need
+            // no validity anchor; ledger rows do.
+            const stale = entries.filter((e) => !e.fresh);
+            let path: string | null;
+            if (stale.length > 0) {
+              path = await openHintedFolder(ledgerKey, stale);
+              if (!path && entries.some((e) => e.fresh)) {
+                path = (await this.resolveFolder(kindOfLedgerKey(ledgerKey))) ?? null;
+                if (path) await client.mailboxOpen(path);
+              }
+            } else {
+              path = (await this.resolveFolder(kindOfLedgerKey(ledgerKey))) ?? null;
+              if (path) await client.mailboxOpen(path);
+            }
+            if (!path) continue;
+            const storeSet = entries.filter((e) => e.fresh || !condemned.has(e.threadId));
+            if (storeSet.length === 0) continue;
+
+            const targetUids = new Set(storeSet.map((e) => e.uid));
+            const seen = new Set<number>();
+            // Condition (2) for STOREs, from the response itself: the
+            // non-SILENT variant returns an untagged FETCH per message whose
+            // flags actually changed, surfaced by imapflow as 'flags' events
+            // (UID always included for UID STORE, RFC 3501 §6.4.8).
+            const onFlags = (u: { path?: string; uid?: number }) => {
+              if (u?.path === path && typeof u.uid === 'number' && targetUids.has(u.uid))
+                seen.add(u.uid);
+            };
+            client.on('flags', onFlags);
+            try {
+              await storeFlags([...targetUids].sort((a, b) => a - b).join(','));
+            } finally {
+              client.off('flags', onFlags);
+            }
+
+            // An unreported uid is ambiguous: already-in-desired-state (the
+            // server sends no untagged FETCH when nothing changed) or
+            // nonexistent. Only that ambiguity pays the extra round trip.
+            const unseen = [...targetUids].filter((u) => !seen.has(u));
+            if (unseen.length > 0) {
+              const existing = new Set(
+                (await client.search({ uid: unseen.join(',') }, { uid: true })) || [],
+              );
+              for (const e of storeSet) {
+                if (!seen.has(e.uid) && !existing.has(e.uid)) {
+                  // Condition (3): the uid provably does not exist here.
+                  if (!e.fresh) resolution.staleRows.push({ folder: ledgerKey, uid: e.uid });
+                  condemn(e.threadId, 'uid-missing');
+                }
+              }
+            }
+          }
+
+          // Search fallback for condemned threads.
+          const fallbackTids = [...condemned.keys()];
+          if (fallbackTids.length) {
+            const members = await this.searchThreadMembersAttributed(fallbackTids, scope);
+            for (const [folder, entries] of members) {
+              const mailbox = await client.mailboxOpen(folder);
+              await storeFlags(entries.map((e) => e.uid).join(','));
+              // Repair material: what the search just proved, but only for
+              // folders whose recorded validity matches the live one --
+              // rows in never-synced folders would never be trusted (and
+              // never corrected by a sync), so writing them is noise.
+              const key = asLedgerKey(this.getFolderKind(folder) ?? folder.toLowerCase());
+              if (hints?.validity[key] === Number(mailbox.uidValidity)) {
+                for (const e of entries) {
+                  resolution.discovered.push({ threadId: e.threadId, folder: key, uid: e.uid });
+                }
+              }
+            }
           }
         }
 
-        return { moves };
+        resolution.fallback = [...condemned].map(([threadId, reason]) => ({ threadId, reason }));
+        resolution.mode = !hints
+          ? 'search'
+          : condemned.size === 0
+            ? 'ledger'
+            : condemned.size >= threadIds.length
+              ? 'search'
+              : 'mixed';
+        // Dedupe: the move pass and the flag pass can both discover the same
+        // landing spot for one message.
+        resolution.discovered = [
+          ...new Map(
+            resolution.discovered.map((d) => [`${d.threadId}|${d.folder}|${d.uid}`, d]),
+          ).values(),
+        ];
+
+        return { moves, resolution };
       },
       { ids, options },
     );

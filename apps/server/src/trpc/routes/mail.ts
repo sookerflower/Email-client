@@ -230,8 +230,14 @@ export const mailRouter = router({
       const { threadIds } = result;
 
       if (threadIds.length) {
-        await applyThreadLabels(activeConnection.id, threadIds, addLabels, removeLabels);
-        return { success: true };
+        const applied = await applyThreadLabels(activeConnection.id, threadIds, addLabels, removeLabels);
+        // `resolution` (item C) reports HOW thread members were resolved
+        // (ledger fast path vs search fallback); the action matrix asserts
+        // on it. Additive -- UI callers only read `success`.
+        return {
+          success: true,
+          resolution: 'resolution' in applied ? applied.resolution : undefined,
+        };
       }
 
       console.log('Server: No label changes specified');

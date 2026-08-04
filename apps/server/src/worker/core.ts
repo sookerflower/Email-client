@@ -191,6 +191,24 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
     if (existing) {
       clearTimeout(existing.timer);
       existing.timer = setTimeout(() => void evict(key), IDLE_MS);
+      // Re-stamp caller identity onto the cached driver. The cache is keyed
+      // by account+decrypted-password, NOT by caller, so the entry's stored
+      // auth is whatever its CREATOR sent — and the sign-in probe creates
+      // drivers with NO connectionId (it runs before the connection row
+      // exists). A probe-created entry then failed EVERY q search for the
+      // account with 'connectionId required for search cache isolation'
+      // until the worker restarted: background syncs kept resetting the
+      // idle timer, so it never healed. Stamping runs per request inside
+      // the per-account lock (no interleaving), and only when the caller
+      // HAS an identity — a probe hitting a warm entry must not strip one.
+      // This is also what keeps the search cache per-connection when two
+      // connection rows share one mailbox account: each request's commands
+      // run under its own connectionId.
+      if (auth.connectionId) {
+        existing.driver.config.auth.connectionId = auth.connectionId;
+        existing.driver.config.auth.userId = auth.userId;
+        existing.driver.config.auth.email = auth.email;
+      }
       return { driver: existing.driver, key };
     }
 

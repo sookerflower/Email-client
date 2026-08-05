@@ -1,7 +1,7 @@
 {
   "name": "AxMail",
   "short_name": "AxMail",
-  "description": "AxMail - open source email app that puts your privacy and safety first.",
+  "description": "AxMail - self-hosted email app that puts your privacy and safety first.",
   "scope": "/",
   "start_url": "/mail/inbox",
   "display": "standalone",

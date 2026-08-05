@@ -66,7 +66,7 @@
     },
     "commandPalette": {
       "title": "コマンド パレット",
-      "description": "Mail-0のクイックナビゲーションとアクション",
+      "description": "AxMailのクイックナビゲーションとアクション",
       "placeholder": "コマンドを入力するか検索...",
       "noResults": "何も見つかりませんでした",
       "groups": {
@@ -466,8 +466,8 @@
         "customPromptPlaceholder": "AIのカスタムプロンプトを入力...",
         "customPromptDescription": "AIがメールの返信を書く方法をカスタマイズします。これはベースプロンプトに追加されます。",
         "noResultsFound": "結果が見つかりませんでした",
-        "zeroSignature": "Zero署名",
-        "zeroSignatureDescription": "メールにZero署名を追加します。",
+        "zeroSignature": "AxMail署名",
+        "zeroSignatureDescription": "メールにAxMail署名を追加します。",
         "undoSendEnabled": "送信取り消し",
         "undoSendEnabledDescription": "メール送信後30秒以内の取り消しを許可します。",
         "defaultEmailAlias": "デフォルトのメールエイリアス",
@@ -480,7 +480,7 @@
       },
       "connections": {
         "title": "メールの接続",
-        "description": "メールアカウントをZeroに接続します。",
+        "description": "メールアカウントをAxMailに接続します。",
         "disconnectTitle": "メールアカウントを切断する",
         "disconnectDescription": "このメールアドレスを切断してもよろしいですか？",
         "cancel": "キャンセル",
@@ -613,7 +613,7 @@
     "createEmail": {
       "invalidEmail": "無効なメールアドレスです",
       "body": "本文",
-      "example": "zero@0.email",
+      "example": "user@axmail.dev",
       "attachments": "添付ファイル",
       "addMore": "さらに追加",
       "dropFilesToAttach": "添付するファイルをドロップ",
@@ -668,6 +668,6 @@
   "errorMessages": {
     "required_scopes_missing": "完全な体験を提供するために必要な権限が不足しています。もう一度サインインして、リクエストされたアクセスを許可してください。",
     "early_access_required": "ログインするにはアーリーアクセスが必要です",
-    "unauthorized": "Zeroは第三者プロバイダーからデータを読み込めませんでした。もう一度お試しください。"
+    "unauthorized": "AxMailは第三者プロバイダーからデータを読み込めませんでした。もう一度お試しください。"
   }
 }

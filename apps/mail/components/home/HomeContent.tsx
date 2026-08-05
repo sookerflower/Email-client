@@ -1090,7 +1090,7 @@ export default function HomeContent() {
                         <div className="flex flex-1 items-center justify-start gap-3">
                           <div className="flex items-center justify-start gap-1">
                             <div className="text-base-gray-950 justify-start text-sm leading-none">
-                              Adam from Zero
+                              Adam from AxMail
                             </div>
                             <div className="justify-start text-center text-sm leading-none text-[#8C8C8C]">
                               [9]

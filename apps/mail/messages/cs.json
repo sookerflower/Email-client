@@ -66,7 +66,7 @@
     },
     "commandPalette": {
       "title": "Paleta příkazů",
-      "description": "Rychlá navigace a akce v Mail-0",
+      "description": "Rychlá navigace a akce v AxMail",
       "placeholder": "Napište příkaz nebo vyhledejte...",
       "noResults": "Nebyly nalezeny žádné výsledky",
       "groups": {
@@ -466,8 +466,8 @@
         "customPromptPlaceholder": "Zadejte vlastní pokyn pro AI...",
         "customPromptDescription": "Přizpůsobte, jak AI píše vaše e-mailové odpovědi. Toto bude přidáno k základnímu pokynu.",
         "noResultsFound": "Nebyly nalezeny žádné výsledky",
-        "zeroSignature": "Zero podpis",
-        "zeroSignatureDescription": "Přidat Zero podpis k vašim emailům.",
+        "zeroSignature": "AxMail podpis",
+        "zeroSignatureDescription": "Přidat AxMail podpis k vašim emailům.",
         "undoSendEnabled": "Odvolat odeslání",
         "undoSendEnabledDescription": "Umožnit zrušení e-mailů do 30 sekund po odeslání.",
         "defaultEmailAlias": "Výchozí e-mailový alias",
@@ -480,7 +480,7 @@
       },
       "connections": {
         "title": "Propojení emailu",
-        "description": "Propojit emailový účet k Zero.",
+        "description": "Propojit emailový účet k AxMail.",
         "disconnectTitle": "Odpojit emailový účet",
         "disconnectDescription": "Opravdu chcete odpojit tento email?",
         "cancel": "Zrušit",
@@ -613,7 +613,7 @@
     "createEmail": {
       "invalidEmail": "Neplatná e-mailová adresa",
       "body": "Tělo",
-      "example": "nula@0.email",
+      "example": "nula@axmail.dev",
       "attachments": "Přílohy",
       "addMore": "Přidat další",
       "dropFilesToAttach": "Přetáhněte sem soubory",
@@ -668,6 +668,6 @@
   "errorMessages": {
     "required_scopes_missing": "Chybí nám oprávnění potřebná k vytvoření plnohodnotného zážitku. Přihlaste se prosím znovu a povolte požadovaný přístup.",
     "early_access_required": "Pro přihlášení je vyžadován předběžný přístup",
-    "unauthorized": "Zero nemohl načíst vaše data od poskytovatele třetí strany. Zkuste to prosím znovu."
+    "unauthorized": "AxMail nemohl načíst vaše data od poskytovatele třetí strany. Zkuste to prosím znovu."
   }
 }

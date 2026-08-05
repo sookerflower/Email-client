@@ -223,7 +223,7 @@ const app = new Hono<HonoContext>()
   // external MCP surface, if ever wanted, is a plain @modelcontextprotocol
   // Streamable-HTTP server reusing tools.ts (deliberately deferred).
   .route('/api', api)
-  .get('/health', (c) => c.json({ message: 'Zero Server is Up!' }))
+  .get('/health', (c) => c.json({ message: 'AxMail Server is Up!' }))
   .get('/', (c) => c.redirect(`${env.VITE_PUBLIC_APP_URL}`))
   .post('/a8n/notify/:providerId', async (c) => {
     const tracer = initTracing();

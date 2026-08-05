@@ -48,14 +48,14 @@ const getProviderIcon = (providerId: string, className?: string): ReactNode => {
         <>
           <img
             src="/white-icon.svg"
-            alt="Zero"
+            alt="AxMail"
             width={15}
             height={15}
             className="mr-2 hidden dark:block"
           />
           <img
             src="/black-icon.svg"
-            alt="Zero"
+            alt="AxMail"
             width={15}
             height={15}
             className="mr-2 block dark:hidden"

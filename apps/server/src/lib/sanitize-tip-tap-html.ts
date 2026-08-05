@@ -18,7 +18,7 @@ export const sanitizeTipTapHtml = async (
   const processedHtml = html.replace(
     /<img[^>]+src=["']data:([^;]+);base64,([^"']+)["'][^>]*>/gi,
     (match, mimeType, base64Data) => {
-      const cid = `image_${uuidv4()}@0.email`;
+      const cid = `image_${uuidv4()}@axmail.dev`;
       inlineImages.push({
         cid,
         data: base64Data,

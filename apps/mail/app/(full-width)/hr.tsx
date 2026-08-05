@@ -131,7 +131,7 @@ export default function HRPage() {
     },
     {
       id: '4',
-      name: 'Nizzy',
+      name: 'Sam',
       timezone: 'America/Chicago',
       startTime: '11:00',
       endTime: '12:00',

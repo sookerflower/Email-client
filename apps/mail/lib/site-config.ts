@@ -1,6 +1,6 @@
 const TITLE = 'AxMail';
 const DESCRIPTION =
-  'Experience email the way you want with AxMail - the open source email app that puts your privacy and safety first.';
+  'Experience email the way you want with AxMail - the self-hosted email app that puts your privacy and safety first.';
 
 export const siteConfig = {
   title: TITLE,

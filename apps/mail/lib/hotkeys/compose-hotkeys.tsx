@@ -9,7 +9,12 @@ export function ComposeHotkeys() {
   const handlers = {
     closeCompose: () => {
       if (isComposeOpen === 'true') {
-        setIsComposeOpen('false');
+        // Closed = param ABSENT (null). Every writer uses 'true'/null and
+        // every reader checks === 'true' or truthiness; this used to write
+        // the STRING 'false', which is truthy, so the "close" hotkey left
+        // both compose dialogs (open={!!isComposeOpen}) OPEN while flipping
+        // the exact-match readers to closed — a half-closed zombie state.
+        setIsComposeOpen(null);
       }
     },
   };

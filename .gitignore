@@ -65,7 +65,14 @@ apps/server/dist-node/
 apps/server/data/
 docker-data/
 .claude/
-.agents/
+# Agent workspace stays ignored EXCEPT the standing rules, which are part
+# of the repo (zerorule.md was previously invisible to git and only present
+# via a git add -f — exactly the class of file this project has lost).
+# NOTE the form: a trailing-slash directory ignore (`.agents/`) cannot be
+# undone by negating a child — git never descends into an excluded
+# directory — so the wildcard + negation pair is required.
+.agents/*
+!.agents/rules/
 apps/server/imap-sidecar/.label-store.json*
 
 # Scratch / throwaway probes. Keeps "commit everything" from sweeping in

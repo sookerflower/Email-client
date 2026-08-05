@@ -32,6 +32,14 @@ import { useMutation } from '@tanstack/react-query';
 import { useSettings } from '@/hooks/use-settings';
 
 import { cn, formatFileSize } from '@/lib/utils';
+import {
+  initialDraftAutosaveState,
+  reduceDraftAutosave,
+  shouldScheduleDraftSave,
+  nextDraftSaveDelayMs,
+  MAX_DRAFT_SAVE_ATTEMPTS,
+  type DraftAutosaveEvent,
+} from '@/lib/draft-autosave';
 import { useThread } from '@/hooks/use-threads';
 import { serializeFiles } from '@/lib/schemas';
 import { Input } from '@/components/ui/input';
@@ -120,6 +128,17 @@ export function EmailComposer({
   const [isLoading, setIsLoading] = useState(false);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  // All dirty/failure transitions go through the draft-autosave reducer
+  // (lib/draft-autosave.ts) so the "failure keeps the compose dirty"
+  // invariant lives in tested code. `hasUnsavedChanges` mirrors
+  // `autosaveState.current.dirty` for rendering and effect wake-ups.
+  const autosaveState = useRef(initialDraftAutosaveState);
+  const applyAutosave = (event: DraftAutosaveEvent) => {
+    autosaveState.current = reduceDraftAutosave(autosaveState.current, event);
+    setHasUnsavedChanges(autosaveState.current.dirty);
+  };
+  /** Every user-edit path funnels here: marks dirty, resets save failures. */
+  const markUnsaved = () => applyAutosave({ type: 'edit' });
   const [messageLength, setMessageLength] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [threadId] = useQueryState('threadId');
@@ -162,7 +181,7 @@ export function EmailComposer({
           compressed: compressedFiles.length,
         });
         setValue('attachments', filesToProcess, { shouldDirty: true });
-        setHasUnsavedChanges(true);
+        markUnsaved();
         if (showToast) {
           toast.error('Image compression failed, using original files');
         }
@@ -170,7 +189,7 @@ export function EmailComposer({
       }
 
       setValue('attachments', compressedFiles, { shouldDirty: true });
-      setHasUnsavedChanges(true);
+      markUnsaved();
 
       if (showToast && quality !== 'original') {
         let totalOriginalSize = 0;
@@ -200,7 +219,7 @@ export function EmailComposer({
     } catch (error) {
       console.error('Error compressing images:', error);
       setValue('attachments', filesToProcess, { shouldDirty: true });
-      setHasUnsavedChanges(true);
+      markUnsaved();
       if (showToast) {
         toast.error('Image compression failed, using original files');
       }
@@ -259,14 +278,14 @@ export function EmailComposer({
     const newOriginals = originalAttachments.filter((_, i) => i !== index);
     setOriginalAttachments(newOriginals);
     await processAndSetAttachments(newOriginals, imageQuality);
-    setHasUnsavedChanges(true);
+    markUnsaved();
   };
 
   const editor = useComposeEditor({
     initialValue: initialMessage,
     isReadOnly: isLoading,
     onLengthChange: (length) => {
-      setHasUnsavedChanges(true);
+      markUnsaved();
       setMessageLength(length);
     },
     onModEnter: () => {
@@ -364,7 +383,8 @@ export function EmailComposer({
         fromEmail: values.fromEmail,
         scheduleAt,
       });
-      setHasUnsavedChanges(false);
+      // Content persisted via the send path: clean state through the reducer.
+      applyAutosave({ type: 'save-success' });
       editor.commands.clearContent(true);
       form.reset();
       setIsComposeOpen(null);
@@ -470,14 +490,27 @@ export function EmailComposer({
       if (response?.id && response.id !== draftId) {
         setDraftId(response.id);
       }
+      // SUCCESS is the only outcome that marks the compose clean. This
+      // used to happen in catch AND finally too, so a single failed save
+      // marked the content "saved", autosave never retried, and the text
+      // was silently lost unless the send succeeded.
+      applyAutosave({ type: 'save-success' });
     } catch (error) {
       console.error('Error saving draft:', error);
-      toast.error('Failed to save draft');
-      setIsSavingDraft(false);
-      setHasUnsavedChanges(false);
+      applyAutosave({ type: 'save-failure' });
+      const { failures } = autosaveState.current;
+      // Surface once at the first failure and once at the cap — not on
+      // every backoff attempt in between.
+      if (failures === 1) {
+        toast.error('Failed to save draft — will retry');
+      } else if (failures >= MAX_DRAFT_SAVE_ATTEMPTS) {
+        toast.error(
+          'Draft could NOT be saved — your changes are unsaved. Check your connection; editing will retry.',
+          { duration: 10000 },
+        );
+      }
     } finally {
       setIsSavingDraft(false);
-      setHasUnsavedChanges(false);
     }
   };
 
@@ -493,7 +526,7 @@ export function EmailComposer({
 
       const { subject } = await generateEmailSubject({ message: messageText });
       setValue('subject', subject);
-      setHasUnsavedChanges(true);
+      markUnsaved();
     } catch (error) {
       console.error('Error generating subject:', error);
       toast.error('Failed to generate subject');
@@ -535,11 +568,15 @@ export function EmailComposer({
 
   useEffect(() => {
     if (!hasUnsavedChanges) return;
+    // Bounded: after MAX_DRAFT_SAVE_ATTEMPTS consecutive failures nothing is
+    // scheduled until the next edit resets the count. Every save is an IMAP
+    // APPEND against the mail server — an unbounded 3s retry loop against a
+    // failing server is the fail2ban shape this repo has been burned by.
+    if (!shouldScheduleDraftSave(autosaveState.current)) return;
 
     const autoSaveTimer = setTimeout(() => {
-      console.log('timeout set');
       saveDraft();
-    }, 3000);
+    }, nextDraftSaveDelayMs(autosaveState.current));
 
     return () => clearTimeout(autoSaveTimer);
   }, [hasUnsavedChanges, saveDraft]);
@@ -699,7 +736,7 @@ export function EmailComposer({
               onChange={(e) => {
                 const value = replaceEmojiShortcodes(e.target.value);
                 setValue('subject', value);
-                setHasUnsavedChanges(true);
+                markUnsaved();
               }}
             />
             <button
@@ -728,7 +765,7 @@ export function EmailComposer({
               value={fromEmail || ''}
               onValueChange={(value) => {
                 setValue('fromEmail', value);
-                setHasUnsavedChanges(true);
+                markUnsaved();
               }}
             >
               <SelectTrigger className="h-6 flex-1 border-0 bg-transparent p-0 text-sm font-normal text-black placeholder:text-[#797979] focus:outline-none focus:ring-0 dark:text-white/90">

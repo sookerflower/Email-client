@@ -33,12 +33,9 @@ import { useSettings } from '@/hooks/use-settings';
 
 import { cn, formatFileSize } from '@/lib/utils';
 import {
-  initialDraftAutosaveState,
-  reduceDraftAutosave,
-  shouldScheduleDraftSave,
-  nextDraftSaveDelayMs,
-  MAX_DRAFT_SAVE_ATTEMPTS,
-  type DraftAutosaveEvent,
+  initialDraftSaveState,
+  reduceDraftSave,
+  type DraftSaveEvent,
 } from '@/lib/draft-autosave';
 import { useThread } from '@/hooks/use-threads';
 import { serializeFiles } from '@/lib/schemas';
@@ -128,17 +125,18 @@ export function EmailComposer({
   const [isLoading, setIsLoading] = useState(false);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-  // All dirty/failure transitions go through the draft-autosave reducer
+  // All dirty/failure transitions go through the draft-save reducer
   // (lib/draft-autosave.ts) so the "failure keeps the compose dirty"
   // invariant lives in tested code. `hasUnsavedChanges` mirrors
-  // `autosaveState.current.dirty` for rendering and effect wake-ups.
-  const autosaveState = useRef(initialDraftAutosaveState);
-  const applyAutosave = (event: DraftAutosaveEvent) => {
-    autosaveState.current = reduceDraftAutosave(autosaveState.current, event);
-    setHasUnsavedChanges(autosaveState.current.dirty);
+  // `draftSaveState.current.dirty` for rendering. Saving is MANUAL-only:
+  // no timer exists; saveDraft runs from the user's explicit actions.
+  const draftSaveState = useRef(initialDraftSaveState);
+  const applyDraftSave = (event: DraftSaveEvent) => {
+    draftSaveState.current = reduceDraftSave(draftSaveState.current, event);
+    setHasUnsavedChanges(draftSaveState.current.dirty);
   };
   /** Every user-edit path funnels here: marks dirty, resets save failures. */
-  const markUnsaved = () => applyAutosave({ type: 'edit' });
+  const markUnsaved = () => applyDraftSave({ type: 'edit' });
   const [messageLength, setMessageLength] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [threadId] = useQueryState('threadId');
@@ -384,7 +382,7 @@ export function EmailComposer({
         scheduleAt,
       });
       // Content persisted via the send path: clean state through the reducer.
-      applyAutosave({ type: 'save-success' });
+      applyDraftSave({ type: 'save-success' });
       editor.commands.clearContent(true);
       form.reset();
       setIsComposeOpen(null);
@@ -470,9 +468,6 @@ export function EmailComposer({
     if (editor.getHTML() === initialMessage.trim()) return;
     if (!values.to.length || !values.subject.length || !messageText.length) return;
     if (aiGeneratedMessage || aiIsLoading || isGeneratingSubject) return;
-    // Belt for timers armed before a suppression/cap landed: the effect
-    // gates scheduling, this gates a stale timer that already fired.
-    if (!shouldScheduleDraftSave(autosaveState.current)) return;
 
     try {
       setIsSavingDraft(true);
@@ -495,23 +490,16 @@ export function EmailComposer({
       }
       // SUCCESS is the only outcome that marks the compose clean. This
       // used to happen in catch AND finally too, so a single failed save
-      // marked the content "saved", autosave never retried, and the text
-      // was silently lost unless the send succeeded.
-      applyAutosave({ type: 'save-success' });
+      // marked the content "saved" and the text was silently lost unless
+      // the send succeeded.
+      applyDraftSave({ type: 'save-success' });
     } catch (error) {
       console.error('Error saving draft:', error);
-      applyAutosave({ type: 'save-failure' });
-      const { failures } = autosaveState.current;
-      // Surface once at the first failure and once at the cap — not on
-      // every backoff attempt in between.
-      if (failures === 1) {
-        toast.error('Failed to save draft — will retry');
-      } else if (failures >= MAX_DRAFT_SAVE_ATTEMPTS) {
-        toast.error(
-          'Draft could NOT be saved — your changes are unsaved. Check your connection; editing will retry.',
-          { duration: 10000 },
-        );
-      }
+      applyDraftSave({ type: 'save-failure' });
+      // Manual model: no automatic retry (the user retries by clicking;
+      // hammering a failing IMAP server is the fail2ban shape). Surface
+      // every failure — each one is a user-initiated action that lost.
+      toast.error('Failed to save draft — your changes are still unsaved');
     } finally {
       setIsSavingDraft(false);
     }
@@ -529,14 +517,11 @@ export function EmailComposer({
 
       const { subject } = await generateEmailSubject({ message: messageText });
       setValue('subject', subject);
-      // NOT markUnsaved(): a generated subject alone must never persist a
-      // draft. The compose is usually ALREADY dirty from typing the body
-      // (the button requires body text), and the empty subject was the only
-      // thing keeping the completeness gate shut — so this suppresses
-      // autosave until the next user edit (or an accepted AI body, which
-      // arrives as an editor change). "Click generate, walk away" must
-      // leave no draft behind.
-      applyAutosave({ type: 'ai-subject-generated' });
+      // Deliberately NO dirty-marking here. Under the manual-save model
+      // nothing persists without an explicit user action anyway, and a
+      // generated subject alone is not user content — "click generate,
+      // walk away" must leave no draft behind. (The autosave-era
+      // suppression event this replaced is gone with the timer.)
     } catch (error) {
       console.error('Error generating subject:', error);
       toast.error('Failed to generate subject');
@@ -576,20 +561,9 @@ export function EmailComposer({
     };
   }, [editor, showLeaveConfirmation]);
 
-  useEffect(() => {
-    if (!hasUnsavedChanges) return;
-    // Bounded: after MAX_DRAFT_SAVE_ATTEMPTS consecutive failures nothing is
-    // scheduled until the next edit resets the count. Every save is an IMAP
-    // APPEND against the mail server — an unbounded 3s retry loop against a
-    // failing server is the fail2ban shape this repo has been burned by.
-    if (!shouldScheduleDraftSave(autosaveState.current)) return;
-
-    const autoSaveTimer = setTimeout(() => {
-      saveDraft();
-    }, nextDraftSaveDelayMs(autosaveState.current));
-
-    return () => clearTimeout(autoSaveTimer);
-  }, [hasUnsavedChanges, saveDraft]);
+  // Drafts save MANUALLY only (Save draft button / Cmd+S / send path /
+  // close guard). The 3-second autosave timer that used to live here is
+  // deliberately gone — saving happens when the user asks, not on a clock.
 
   useEffect(() => {
     const handlePasteFiles = (event: ClipboardEvent) => {

@@ -246,28 +246,9 @@ function LoginClientContent({ providers, isProd }: LoginClientProps) {
                   ))}
                 </div>
 
-                <a
-                  href="https://github.com/Mail-0/Mail-0/blob/main/README.md"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center text-sm text-black/60 underline underline-offset-2 hover:text-black dark:text-white/60 dark:hover:text-white"
-                >
-                  Setup instructions in documentation
-                  <svg
-                    className="ml-1 h-3 w-3"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-                    />
-                  </svg>
-                </a>
+                <span className="inline-flex items-center text-sm text-black/60 dark:text-white/60">
+                  Ask your administrator for the required server settings.
+                </span>
               </div>
             </div>
           )}

@@ -363,13 +363,9 @@ const createAuthConfig = () => {
           }),
     },
     baseURL: env.VITE_PUBLIC_BACKEND_URL,
-    trustedOrigins: [
-      'https://app.0.email',
-      'https://sapi.0.email',
-      'https://staging.0.email',
-      'https://0.email',
-      'http://localhost:3000',
-    ],
+    // Upstream's 0.email origins removed: trusting domains we do not
+    // control is a standing CSRF/origin-trust hole, not just branding.
+    trustedOrigins: ['http://localhost:3000'],
     session: {
       cookieCache: {
         enabled: true,

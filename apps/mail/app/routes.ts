@@ -12,7 +12,9 @@ export default [
     // Billing/pricing disabled for self-hosted deployment
     // route('/pricing', '(full-width)/pricing.tsx'),
     route('/privacy', '(full-width)/privacy.tsx'),
-    route('/contributors', '(full-width)/contributors.tsx'),
+    // /contributors removed: the page fetched and displayed the UPSTREAM
+    // repo's contributor list — an open-source surface this product does
+    // not present. The page file remains unrouted.
     route('/hr', '(full-width)/hr.tsx'),
   ]),
 

@@ -1,26 +1,7 @@
-import { LinkedIn, Twitter, Discord } from '../icons/icons';
 import { motion } from 'motion/react';
 import { Button } from '../ui/button';
 import { Link } from 'react-router';
 import { useRef } from 'react';
-
-const socialLinks = [
-  {
-    name: 'Twitter',
-    href: 'https://x.com/mail0dotcom',
-    icon: Twitter,
-  },
-  {
-    name: 'LinkedIn',
-    href: 'https://www.linkedin.com/company/mail0/',
-    icon: LinkedIn,
-  },
-  {
-    name: 'Discord',
-    href: 'https://discord.gg/mail0',
-    icon: Discord,
-  },
-];
 
 export default function Footer() {
   const ref = useRef(null);
@@ -88,37 +69,6 @@ export default function Footer() {
                 <img src="/white-icon.svg" alt="logo" width={100} height={100} />
               </a>
             </div>
-            <div className="inline-flex items-center justify-start gap-4">
-              {socialLinks.map((social) => (
-                <a
-                  key={social.name}
-                  href={social.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-2.5 rounded-[999px] bg-white/10 p-2 backdrop-blur-[20px] transition-colors hover:bg-white/20"
-                >
-                  <div className="relative h-3.5 w-3.5 overflow-hidden">
-                    <social.icon className="absolute h-3.5 w-3.5 fill-white" />
-                  </div>
-                </a>
-              ))}
-            </div>
-            <div className="flex items-center justify-start gap-3">
-              <div className="justify-start text-base font-normal leading-none text-white opacity-80">
-                Backed by
-              </div>
-              <a href="https://www.ycombinator.com" target="_blank" rel="noopener noreferrer">
-                <div className="relative w-36 overflow-hidden">
-                  <img
-                    src="/yc.svg"
-                    className="bg-transparent"
-                    alt="logo"
-                    width={100}
-                    height={100}
-                  />
-                </div>
-              </a>
-            </div>
           </div>
           <div className="flex flex-1 items-start justify-end gap-5 md:gap-10 ">
             <div className="inline-flex flex-col items-start justify-start gap-5">
@@ -126,16 +76,6 @@ export default function Footer() {
                 Resources
               </div>
               <div className="flex flex-col items-start justify-start gap-4 self-stretch">
-                <a
-                  target="_blank"
-                  rel="noreferrer"
-                  href="https://trust.inc/zero"
-                  className="w-full"
-                >
-                  <div className="justify-start self-stretch text-sm md:text-base font-normal leading-none text-white opacity-80 transition-opacity hover:opacity-100">
-                    SOC2
-                  </div>
-                </a>
                 <a href="/privacy" className="w-full" target="_blank">
                   <div className="justify-start self-stretch text-sm md:text-base leading-none text-white opacity-80 transition-opacity hover:opacity-100">
                     Privacy Policy
@@ -179,22 +119,9 @@ export default function Footer() {
                 Company
               </div>
               <div className="flex flex-col items-start justify-start gap-4 self-stretch">
-                <a target="_blank" href="/contributors" className="w-full">
-                  <div className="justify-start self-stretch text-sm md:text-base font-normal leading-none text-white opacity-80 transition-opacity hover:opacity-100">
-                    Contributors
-                  </div>
-                </a>
                 <a target="_blank" href="/about" className="w-full">
                   <div className="justify-start self-stretch text-sm md:text-base font-normal leading-none text-white opacity-80 transition-opacity hover:opacity-100">
                     About
-                  </div>
-                </a>
-                <a
-                  href="#"
-                  className="w-full"
-                >
-                  <div className="justify-start self-stretch text-sm md:text-base font-normal leading-none text-white opacity-80 transition-opacity hover:opacity-100">
-                    Github
                   </div>
                 </a>
               </div>

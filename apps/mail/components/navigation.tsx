@@ -7,44 +7,12 @@ import {
   ListItem,
 } from '@/components/ui/navigation-menu';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
-import { GitHub, Twitter, Discord, LinkedIn, Star } from './icons/icons';
-import { AnimatedNumber } from '@/components/ui/animated-number';
 import { signIn, useSession } from '@/lib/auth-client';
-import { Separator } from '@/components/ui/separator';
-import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router';
 import { Button } from '@/components/ui/button';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Menu } from 'lucide-react';
-import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
-
-const resources = [
-  {
-    title: 'GitHub',
-    href: '#',
-    description: 'Check out our open-source projects and contributions.',
-    platform: 'github' as const,
-  },
-  {
-    title: 'Twitter',
-    href: '#',
-    description: 'Follow us for the latest updates and announcements.',
-    platform: 'twitter' as const,
-  },
-  {
-    title: 'LinkedIn',
-    href: '#',
-    description: 'Connect with us professionally and stay updated.',
-    platform: 'linkedin' as const,
-  },
-  {
-    title: 'Discord',
-    href: '#',
-    description: 'Join our community and chat with the team.',
-    platform: 'discord' as const,
-  },
-];
 
 const aboutLinks = [
   {
@@ -62,50 +30,12 @@ const aboutLinks = [
     href: '/terms',
     description: 'Review our terms of service and usage guidelines.',
   },
-  {
-    title: 'Contributors',
-    href: '/contributors',
-    description: 'See the contributors to AxMail.',
-  },
 ];
-
-const IconComponent = {
-  github: GitHub,
-  twitter: Twitter,
-  discord: Discord,
-  linkedin: LinkedIn,
-};
-
-interface GitHubApiResponse {
-  stargazers_count: number;
-}
 
 export function Navigation() {
   const [open, setOpen] = useState(false);
-  const [stars, setStars] = useState(0); // Default fallback value
   const { data: session } = useSession();
   const navigate = useNavigate();
-
-  const { data: githubData } = useQuery({
-    queryKey: ['githubStars'],
-    queryFn: async () => {
-      const response = await fetch('https://api.github.com/repos/Mail-0/Zero', {
-        headers: {
-          Accept: 'application/vnd.github.v3+json',
-        },
-      });
-      if (!response.ok) {
-        throw new Error('Failed to fetch GitHub stars');
-      }
-      return response.json() as Promise<GitHubApiResponse>;
-    },
-  });
-
-  useEffect(() => {
-    if (githubData) {
-      setStars(githubData.stargazers_count || 0);
-    }
-  }, [githubData]);
 
   return (
     <>
@@ -135,25 +65,6 @@ export function Navigation() {
                     </ul>
                   </NavigationMenuContent>
                 </NavigationMenuItem>
-                <NavigationMenuItem>
-                  <NavigationMenuTrigger className="bg-transparent text-white cursor-pointer">
-                    Resources
-                  </NavigationMenuTrigger>
-                  <NavigationMenuContent>
-                    <ul className="grid w-[400px] gap-3 p-4 md:w-[500px] md:grid-cols-2 lg:w-[600px]">
-                      {resources.map((resource) => (
-                        <ListItem
-                          key={resource.title}
-                          title={resource.title}
-                          href={resource.href}
-                          platform={resource.platform}
-                        >
-                          {resource.description}
-                        </ListItem>
-                      ))}
-                    </ul>
-                  </NavigationMenuContent>
-                </NavigationMenuItem>
                 <NavigationMenuItem className="bg-transparent text-white cursor-pointer">
                   <a href="/privacy">
                     <Button variant="ghost" className="ml-1 h-9 bg-transparent">
@@ -165,22 +76,6 @@ export function Navigation() {
             </NavigationMenu>
           </div>
           <div className="flex gap-2">
-            <a
-              href="#"
-              className={cn(
-                'group inline-flex h-8 items-center gap-2 rounded-lg bg-black px-2 text-sm text-white transition-colors hover:bg-black/90',
-              )}
-            >
-              <div className="flex items-center text-white">
-                <GitHub className="mr-1 size-4 fill-white" />
-                <span className="ml-1 lg:hidden">Star</span>
-                <span className="ml-1 hidden lg:inline">GitHub</span>
-              </div>
-              <div className="flex items-center gap-1 text-sm">
-                <Star className="relative top-px size-4 fill-gray-400 duration-300 group-hover:fill-yellow-400 group-hover:drop-shadow-[0_0_8px_rgba(250,204,21,0.6)]" />
-                <AnimatedNumber value={stars} className="font-medium text-white" />
-              </div>
-            </a>
             <Button
               className="h-8 bg-white text-black hover:bg-white hover:text-black cursor-pointer"
               onClick={() => {
@@ -244,21 +139,6 @@ export function Navigation() {
               >
                 Contact Us
               </a>
-            </div>
-            <Separator className="mt-8" />
-            <div className="mt-8 flex flex-row items-center justify-center gap-4">
-              {resources.map((resource) => {
-                const Icon = IconComponent[resource.platform];
-                return (
-                  <Link
-                    key={resource.title}
-                    to={resource.href}
-                    className="flex items-center gap-2 font-medium"
-                  >
-                    {resource.platform && <Icon className="dark:fill-muted-foreground h-5 w-5" />}
-                  </Link>
-                );
-              })}
             </div>
           </SheetContent>
         </Sheet>

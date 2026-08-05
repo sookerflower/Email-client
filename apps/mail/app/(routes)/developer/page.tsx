@@ -1,4 +1,4 @@
-import { Github, Book, Users, Terminal, Code2, Webhook, ArrowRight, ArrowLeft } from 'lucide-react';
+import { Book, Terminal, Code2, Webhook, ArrowRight, ArrowLeft } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useNavigate } from 'react-router';
@@ -13,26 +13,6 @@ const developerResources = [
     linkText: 'View Documentation',
     color: 'text-blue-500',
     bgColor: 'bg-blue-500/10',
-  },
-  {
-    title: 'GitHub',
-    description: 'Open source repositories',
-    details: 'Access our source code, contribute, and track issues.',
-    icon: Github,
-    href: 'https://github.com',
-    linkText: 'View Repository',
-    color: 'text-purple-500',
-    bgColor: 'bg-purple-500/10',
-  },
-  {
-    title: 'Contributing',
-    description: 'Join our community',
-    details: 'Learn how to contribute to our open source projects.',
-    icon: Users,
-    href: '/contributing',
-    linkText: 'Contribute',
-    color: 'text-green-500',
-    bgColor: 'bg-green-500/10',
   },
   {
     title: 'CLI Tools',

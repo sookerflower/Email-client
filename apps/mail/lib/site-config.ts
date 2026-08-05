@@ -9,7 +9,7 @@ export const siteConfig = {
     icon: '/favicon.ico',
   },
   applicationName: 'AxMail',
-  creator: '@nizzyabi @bruvimtired @ripgrim @needleXO @dakdevs @mrgsub',
+  creator: 'AxMail',
   openGraph: {
     title: TITLE,
     description: DESCRIPTION,
@@ -29,7 +29,7 @@ export const siteConfig = {
   keywords: [
     'Mail',
     'Email',
-    'Open Source',
+    'Self-Hosted',
     'Email Client',
     'Gmail Alternative',
     'Webmail',

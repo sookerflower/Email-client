@@ -79,22 +79,21 @@ const sections = [
     ),
   },
   {
-    title: 'Open Source',
+    title: 'Self-Hosted',
     content: (
       <div className="space-y-4">
         <p>
-          AxMail is built on the principles of transparency and community collaboration. Our entire
-          codebase is open source, allowing anyone to:
+          AxMail is built on the principle that your mail belongs to you. It runs on
+          infrastructure you control, which means:
         </p>
         <ul className="ml-4 list-disc space-y-2">
-          <li>Review our code for security and privacy</li>
-          <li>Contribute improvements and new features</li>
-          <li>Self-host their own instance of AxMail</li>
-          <li>Learn from and build upon our work</li>
+          <li>Your email data never leaves servers you operate</li>
+          <li>No third party reads, mines, or monetises your inbox</li>
+          <li>The service keeps working on your terms, on your hardware</li>
         </ul>
         <p>
-          We believe that email is too important to be controlled by a single entity. By being open
-          source, we ensure that AxMail remains transparent, trustworthy, and accessible to everyone.
+          We believe that email is too important to be controlled by a single entity. By being
+          self-hosted, AxMail keeps your communication private, durable, and under your control.
         </p>
       </div>
     ),

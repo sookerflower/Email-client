@@ -2,7 +2,10 @@ import { type RouteConfig, index, layout, prefix, route } from '@react-router/de
 
 export default [
   index('page.tsx'),
-  route('/home', 'home/page.tsx'),
+  // /home detached (2026-08-06): it duplicated the landing the index route
+  // already renders, and nothing links to it. Code kept; re-enable by
+  // uncommenting.
+  // route('/home', 'home/page.tsx'),
 
   route('/api/mailto-handler', 'mailto-handler.ts'),
 

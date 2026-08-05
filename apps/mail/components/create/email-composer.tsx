@@ -470,6 +470,9 @@ export function EmailComposer({
     if (editor.getHTML() === initialMessage.trim()) return;
     if (!values.to.length || !values.subject.length || !messageText.length) return;
     if (aiGeneratedMessage || aiIsLoading || isGeneratingSubject) return;
+    // Belt for timers armed before a suppression/cap landed: the effect
+    // gates scheduling, this gates a stale timer that already fired.
+    if (!shouldScheduleDraftSave(autosaveState.current)) return;
 
     try {
       setIsSavingDraft(true);
@@ -526,7 +529,14 @@ export function EmailComposer({
 
       const { subject } = await generateEmailSubject({ message: messageText });
       setValue('subject', subject);
-      markUnsaved();
+      // NOT markUnsaved(): a generated subject alone must never persist a
+      // draft. The compose is usually ALREADY dirty from typing the body
+      // (the button requires body text), and the empty subject was the only
+      // thing keeping the completeness gate shut — so this suppresses
+      // autosave until the next user edit (or an accepted AI body, which
+      // arrives as an editor change). "Click generate, walk away" must
+      // leave no draft behind.
+      applyAutosave({ type: 'ai-subject-generated' });
     } catch (error) {
       console.error('Error generating subject:', error);
       toast.error('Failed to generate subject');
@@ -1004,6 +1014,13 @@ export function EmailComposer({
                       }),
                     });
                     setAiGeneratedMessage(null);
+                    // ACCEPTING is a user edit: it must mark dirty (and lift
+                    // any subject-generation suppression) EXPLICITLY.
+                    // setContent() does not emit a tiptap update, so the
+                    // editor's onLengthChange never fires here — pre-fix the
+                    // accept flow only autosaved because subject generation
+                    // had force-marked the compose dirty.
+                    markUnsaved();
                   }}
                   onReject={() => {
                     setAiGeneratedMessage(null);

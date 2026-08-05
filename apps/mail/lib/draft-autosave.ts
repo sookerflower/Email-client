@@ -30,17 +30,33 @@ export interface DraftAutosaveState {
   dirty: boolean;
   /** Consecutive failed save attempts since the last edit or success. */
   failures: number;
+  /**
+   * True after an AI subject generation with no user edit since. While set,
+   * autosave must NOT run even though the compose is dirty.
+   *
+   * Why suppression rather than just "don't mark dirty": the generate
+   * buttons require body text, so by the time anyone clicks them, TYPING
+   * THE BODY already marked the compose dirty — the empty subject (the
+   * completeness gate) was the only thing holding autosave back. Filling
+   * the subject via AI would open the gate and persist a draft the user
+   * never asked for ("click generate, walk away, a draft is left behind").
+   * Only a user edit — or an accepted AI body, which lands as an editor
+   * change — un-suppresses.
+   */
+  suppressed: boolean;
 }
 
 export const initialDraftAutosaveState: DraftAutosaveState = {
   dirty: false,
   failures: 0,
+  suppressed: false,
 };
 
 export type DraftAutosaveEvent =
   | { type: 'edit' }
   | { type: 'save-success' }
-  | { type: 'save-failure' };
+  | { type: 'save-failure' }
+  | { type: 'ai-subject-generated' };
 
 export function reduceDraftAutosave(
   state: DraftAutosaveState,
@@ -48,19 +64,23 @@ export function reduceDraftAutosave(
 ): DraftAutosaveState {
   switch (event.type) {
     case 'edit':
-      return { dirty: true, failures: 0 };
+      return { dirty: true, failures: 0, suppressed: false };
     case 'save-success':
-      return { dirty: false, failures: 0 };
+      return { dirty: false, failures: 0, suppressed: false };
     case 'save-failure':
       // THE invariant this module exists for: failure keeps the compose
       // dirty. Clearing here is what silently lost user mail.
-      return { dirty: true, failures: state.failures + 1 };
+      return { ...state, dirty: true, failures: state.failures + 1 };
+    case 'ai-subject-generated':
+      // Dirtiness (from earlier typing) and failure count are untouched;
+      // the generated subject alone must never cause a persist.
+      return { ...state, suppressed: true };
   }
 }
 
 /** Whether the autosave timer should be armed at all. */
 export function shouldScheduleDraftSave(state: DraftAutosaveState): boolean {
-  return state.dirty && state.failures < MAX_DRAFT_SAVE_ATTEMPTS;
+  return state.dirty && !state.suppressed && state.failures < MAX_DRAFT_SAVE_ATTEMPTS;
 }
 
 /** Delay before the next save attempt: base debounce, then capped backoff. */

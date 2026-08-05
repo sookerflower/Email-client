@@ -85,7 +85,7 @@ describe('draft autosave policy', () => {
     expect(shouldScheduleDraftSave(capped)).toBe(false);
 
     const edited = reduceDraftAutosave(capped, { type: 'edit' });
-    expect(edited).toEqual({ dirty: true, failures: 0 });
+    expect(edited).toEqual({ dirty: true, failures: 0, suppressed: false });
     expect(shouldScheduleDraftSave(edited)).toBe(true);
     expect(nextDraftSaveDelayMs(edited)).toBe(DRAFT_AUTOSAVE_DELAY_MS);
   });
@@ -97,7 +97,50 @@ describe('draft autosave policy', () => {
       { type: 'save-failure' },
       { type: 'save-success' },
     ]);
-    expect(s).toEqual({ dirty: false, failures: 0 });
+    expect(s).toEqual({ dirty: false, failures: 0, suppressed: false });
     expect(shouldScheduleDraftSave(s)).toBe(false);
+  });
+
+  describe('AI subject generation must not persist a draft by itself', () => {
+    it('suppresses scheduling even when the compose is already dirty', () => {
+      // The real-world shape: the user TYPED the body (dirty), the empty
+      // subject was the only thing holding the completeness gate shut, and
+      // then AI filled the subject. Pre-fix this opened the gate and left a
+      // draft behind that the user never asked for.
+      const s = afterEvents([{ type: 'edit' }, { type: 'ai-subject-generated' }]);
+      expect(s.dirty).toBe(true); // the typed body is still unsaved content
+      expect(shouldScheduleDraftSave(s)).toBe(false); // ...but nothing schedules
+    });
+
+    it('the next user edit lifts the suppression', () => {
+      const s = afterEvents([
+        { type: 'edit' },
+        { type: 'ai-subject-generated' },
+        { type: 'edit' }, // typing in the body / accepting an AI body
+      ]);
+      expect(s).toEqual({ dirty: true, failures: 0, suppressed: false });
+      expect(shouldScheduleDraftSave(s)).toBe(true);
+    });
+
+    it('a send (save-success) clears suppression along with dirtiness', () => {
+      const s = afterEvents([
+        { type: 'edit' },
+        { type: 'ai-subject-generated' },
+        { type: 'save-success' },
+      ]);
+      expect(s).toEqual({ dirty: false, failures: 0, suppressed: false });
+    });
+
+    it('suppression does not disturb the failure/backoff bookkeeping', () => {
+      const s = afterEvents([
+        { type: 'edit' },
+        { type: 'save-failure' },
+        { type: 'ai-subject-generated' },
+      ]);
+      expect(s.failures).toBe(1);
+      expect(shouldScheduleDraftSave(s)).toBe(false);
+      const edited = reduceDraftAutosave(s, { type: 'edit' });
+      expect(edited).toEqual({ dirty: true, failures: 0, suppressed: false });
+    });
   });
 });

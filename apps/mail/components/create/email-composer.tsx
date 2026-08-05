@@ -55,6 +55,16 @@ import { compressImages } from '@/lib/image-compression';
 import type { ImageQuality } from '@/lib/image-compression';
 
 const shortcodeRegex = /:([a-zA-Z0-9_+-]+):/g;
+
+/**
+ * When the last MANUAL draft save succeeded. Module-scoped on purpose: a
+ * successful save rotates the draft id, and create-email keys the composer
+ * by draft id, so the whole component REMOUNTS right after saving — state
+ * inside the instance cannot carry the "Saved" indicator across that
+ * boundary. The flash reads this on mount and shows for the remainder.
+ */
+let lastManualDraftSaveAt = 0;
+const SAVED_FLASH_MS = 2500;
 import { TemplateButton } from './template-button';
 
 type ThreadContent = {
@@ -263,6 +273,21 @@ export function EmailComposer({
   const subjectInput = watch('subject');
   const attachments = watch('attachments');
   const fromEmail = watch('fromEmail');
+  // Initialized from the module-scoped timestamp so the indicator survives
+  // the remount a successful save causes (see lastManualDraftSaveAt).
+  const [showSavedFlash, setShowSavedFlash] = useState(
+    () => Date.now() - lastManualDraftSaveAt < SAVED_FLASH_MS,
+  );
+  const savedFlashTimer = useRef<NodeJS.Timeout | null>(null);
+  useEffect(() => {
+    const remaining = SAVED_FLASH_MS - (Date.now() - lastManualDraftSaveAt);
+    if (remaining > 0) {
+      savedFlashTimer.current = setTimeout(() => setShowSavedFlash(false), remaining);
+    }
+    return () => {
+      if (savedFlashTimer.current) clearTimeout(savedFlashTimer.current);
+    };
+  }, []);
 
   const handleAttachment = async (newFiles: File[]) => {
     if (newFiles && newFiles.length > 0) {
@@ -296,6 +321,23 @@ export function EmailComposer({
     placeholder: 'Start your email here',
     autofocus,
   });
+
+  // Manual saving is enabled as soon as ANY field has content — deliberately
+  // NOT the send-style completeness rule. The body check asks the editor
+  // directly rather than trusting `messageLength`: that state only updates
+  // on EDITS (the hook's onCreate init is commented out), so a composer
+  // remount with a full body — which happens when the first save writes
+  // draftId into the URL — would otherwise report "no content" and disable
+  // the Save button right after a successful save.
+  const editorHasText = (editor?.getText().trim().length ?? 0) > 0;
+  const hasAnyComposeContent =
+    (toEmails?.length ?? 0) > 0 ||
+    (ccEmails?.length ?? 0) > 0 ||
+    (bccEmails?.length ?? 0) > 0 ||
+    (subjectInput?.trim().length ?? 0) > 0 ||
+    messageLength > 0 ||
+    editorHasText ||
+    (attachments?.length ?? 0) > 0;
 
   // Add effect to focus editor when component mounts
   useEffect(() => {
@@ -458,16 +500,31 @@ export function EmailComposer({
     }
   };
 
-  const saveDraft = async () => {
+  /**
+   * Persist the compose as a draft (IMAP APPEND to the Drafts folder).
+   *
+   * `manual: true` is the explicit user action (Save draft button, Cmd+S,
+   * the close guard): it saves whatever content exists — the historical
+   * recipient+subject+body completeness gate was right for automatic
+   * saving and wrong for manual (three typed lines with no subject and no
+   * recipient MUST save when the user asks). The implicit send-path call
+   * keeps the historical gates.
+   */
+  const saveDraft = async ({ manual = false }: { manual?: boolean } = {}) => {
+    if (isSavingDraft) return;
     const values = getValues();
-
-    if (!hasUnsavedChanges) return;
     const messageText = editor.getText();
 
-    if (messageText.trim() === initialMessage.trim()) return;
-    if (editor.getHTML() === initialMessage.trim()) return;
-    if (!values.to.length || !values.subject.length || !messageText.length) return;
-    if (aiGeneratedMessage || aiIsLoading || isGeneratingSubject) return;
+    if (manual) {
+      // Explicit action: only bail when there is literally nothing to save.
+      if (!hasAnyComposeContent) return;
+    } else {
+      if (!hasUnsavedChanges) return;
+      if (messageText.trim() === initialMessage.trim()) return;
+      if (editor.getHTML() === initialMessage.trim()) return;
+      if (!values.to.length || !values.subject.length || !messageText.length) return;
+      if (aiGeneratedMessage || aiIsLoading || isGeneratingSubject) return;
+    }
 
     try {
       setIsSavingDraft(true);
@@ -493,6 +550,12 @@ export function EmailComposer({
       // marked the content "saved" and the text was silently lost unless
       // the send succeeded.
       applyDraftSave({ type: 'save-success' });
+      if (manual) {
+        lastManualDraftSaveAt = Date.now();
+        setShowSavedFlash(true);
+        if (savedFlashTimer.current) clearTimeout(savedFlashTimer.current);
+        savedFlashTimer.current = setTimeout(() => setShowSavedFlash(false), SAVED_FLASH_MS);
+      }
     } catch (error) {
       console.error('Error saving draft:', error);
       applyDraftSave({ type: 'save-failure' });
@@ -564,6 +627,19 @@ export function EmailComposer({
   // Drafts save MANUALLY only (Save draft button / Cmd+S / send path /
   // close guard). The 3-second autosave timer that used to live here is
   // deliberately gone — saving happens when the user asks, not on a clock.
+
+  // Cmd/Ctrl+S — same action as the Save draft button. preventDefault stops
+  // the browser's own save dialog even when there is nothing to save.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        void saveDraft({ manual: true });
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [saveDraft]);
 
   useEffect(() => {
     const handlePasteFiles = (event: ClipboardEvent) => {
@@ -809,6 +885,23 @@ export function EmailComposer({
               onChange={handleScheduleChange}
               onValidityChange={handleScheduleValidityChange}
             />
+            {/* Save draft: always rendered while composing; enabled as soon
+                as ANY field has content (manual saving has no completeness
+                gate). Repeated clicks update the same draft via draftId. */}
+            <Button
+              variant={'secondary'}
+              size={'xs'}
+              onClick={() => void saveDraft({ manual: true })}
+              disabled={isSavingDraft || !hasAnyComposeContent}
+              className="bg-background border hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors cursor-pointer"
+            >
+              <span className="px-0.5 text-sm">{isSavingDraft ? 'Saving…' : 'Save draft'}</span>
+            </Button>
+            {showSavedFlash ? (
+              <span aria-live="polite" className="text-muted-foreground text-sm">
+                Saved
+              </span>
+            ) : null}
             <Button variant={'secondary'} size={'xs'} onClick={() => fileInputRef.current?.click()} className="bg-background border hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors cursor-pointer">
               <Plus className="h-3 w-3 fill-[#9A9A9A]" />
               <span className="hidden px-0.5 text-sm md:block">Add</span>

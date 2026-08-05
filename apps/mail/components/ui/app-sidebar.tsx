@@ -13,7 +13,7 @@ import { CreateEmail } from '../create/create-email';
 // import { useMutation } from '@tanstack/react-query';
 import { PencilCompose } from '../icons/icons';
 import { useIsMobile } from '@/hooks/use-mobile';
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { useSession } from '@/lib/auth-client';
 import { useAIFullScreen } from './ai-sidebar';
 import { useStats } from '@/hooks/use-stats';
@@ -127,7 +127,17 @@ function ComposeButton() {
   const [, setActiveReplyId] = useQueryState('activeReplyId');
   const [, setMode] = useQueryState('mode');
 
+  // Close guard installed by the composer (threaded through CreateEmail).
+  // This Dialog is what esc/overlay/X actually close, so the guard must be
+  // consulted HERE: with unsaved content the composer opens its blocking
+  // Save/Discard/Cancel dialog and the modal stays open until the user
+  // chooses.
+  const composeCloseGuard = useRef<(() => boolean) | null>(null);
+
   const handleOpenChange = async (open: boolean) => {
+    if (!open && composeCloseGuard.current && !composeCloseGuard.current()) {
+      return; // guard dialog opened; compose modal stays
+    }
     if (!open) {
       setDialogOpen(null);
     } else {
@@ -159,7 +169,7 @@ function ComposeButton() {
       </DialogTrigger>
 
       <DialogContent className="h-screen w-screen max-w-none border-none bg-[#FAFAFA] p-0 shadow-none dark:bg-[#141414]">
-        <CreateEmail />
+        <CreateEmail closeGuardRef={composeCloseGuard} />
       </DialogContent>
     </Dialog>
   );

@@ -19,7 +19,7 @@ import { Check, Command, Loader, Paperclip, Plus, Type, X as XIcon } from 'lucid
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { TextEffect } from '@/components/motion-primitives/text-effect';
 import { ScheduleSendPicker } from './schedule-send-picker';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { useEmailAliases } from '@/hooks/use-email-aliases';
 import useComposeEditor from '@/hooks/use-compose-editor';
 import { CurvedArrow, Sparkles, X } from '../icons/icons';
@@ -42,6 +42,7 @@ import { serializeFiles } from '@/lib/schemas';
 import { Input } from '@/components/ui/input';
 import { EditorContent } from '@tiptap/react';
 import { useForm } from 'react-hook-form';
+import { useBlocker } from 'react-router';
 import { Button } from '../ui/button';
 import { useQueryState } from 'nuqs';
 import { Toolbar } from './toolbar';
@@ -98,6 +99,13 @@ interface EmailComposerProps {
   autofocus?: boolean;
   settingsLoading?: boolean;
   editorClassName?: string;
+  /**
+   * Close-guard hook for a WRAPPING dialog (create-email's esc/X close):
+   * the parent calls the installed function before closing; it returns true
+   * when closing is safe (nothing unsaved) and otherwise opens the blocking
+   * Save/Discard/Cancel dialog and returns false.
+   */
+  closeGuardRef?: MutableRefObject<(() => boolean) | null>;
 }
 
 
@@ -127,6 +135,7 @@ export function EmailComposer({
   autofocus = false,
   settingsLoading = false,
   editorClassName,
+  closeGuardRef,
 }: EmailComposerProps) {
   const { data: aliases } = useEmailAliases();
   const { data: settings } = useSettings();
@@ -510,20 +519,22 @@ export function EmailComposer({
    * recipient MUST save when the user asks). The implicit send-path call
    * keeps the historical gates.
    */
-  const saveDraft = async ({ manual = false }: { manual?: boolean } = {}) => {
-    if (isSavingDraft) return;
+  /** Returns true when the compose is persisted (or there was nothing to
+   *  persist) — the close guard closes only on true. */
+  const saveDraft = async ({ manual = false }: { manual?: boolean } = {}): Promise<boolean> => {
+    if (isSavingDraft) return false;
     const values = getValues();
     const messageText = editor.getText();
 
     if (manual) {
       // Explicit action: only bail when there is literally nothing to save.
-      if (!hasAnyComposeContent) return;
+      if (!hasAnyComposeContent) return true;
     } else {
-      if (!hasUnsavedChanges) return;
-      if (messageText.trim() === initialMessage.trim()) return;
-      if (editor.getHTML() === initialMessage.trim()) return;
-      if (!values.to.length || !values.subject.length || !messageText.length) return;
-      if (aiGeneratedMessage || aiIsLoading || isGeneratingSubject) return;
+      if (!hasUnsavedChanges) return true;
+      if (messageText.trim() === initialMessage.trim()) return true;
+      if (editor.getHTML() === initialMessage.trim()) return true;
+      if (!values.to.length || !values.subject.length || !messageText.length) return true;
+      if (aiGeneratedMessage || aiIsLoading || isGeneratingSubject) return true;
     }
 
     try {
@@ -556,6 +567,7 @@ export function EmailComposer({
         if (savedFlashTimer.current) clearTimeout(savedFlashTimer.current);
         savedFlashTimer.current = setTimeout(() => setShowSavedFlash(false), SAVED_FLASH_MS);
       }
+      return true;
     } catch (error) {
       console.error('Error saving draft:', error);
       applyDraftSave({ type: 'save-failure' });
@@ -563,6 +575,7 @@ export function EmailComposer({
       // hammering a failing IMAP server is the fail2ban shape). Surface
       // every failure — each one is a user-initiated action that lost.
       toast.error('Failed to save draft — your changes are still unsaved');
+      return false;
     } finally {
       setIsSavingDraft(false);
     }
@@ -593,23 +606,83 @@ export function EmailComposer({
     }
   };
 
+  // ---- Close guard (manual-save model) -----------------------------------
+  // Closing a composer with UNSAVED content must go through a blocking
+  // Save draft / Discard / Cancel dialog — on the internal X, on the
+  // wrapping dialog's esc/X (via closeGuardRef), and on route navigation
+  // (via useBlocker below). `pendingCloseRef` records what the user was
+  // trying to do so the chosen button can complete or cancel exactly that.
+  const pendingCloseRef = useRef<'close' | ReturnType<typeof useBlocker> | null>(null);
+
+  const resolvePendingClose = (action: 'proceed' | 'reset') => {
+    const pending = pendingCloseRef.current;
+    pendingCloseRef.current = null;
+    if (pending === 'close' || pending == null) {
+      if (action === 'proceed') onClose?.();
+    } else if (action === 'proceed') {
+      pending.proceed?.();
+    } else {
+      pending.reset?.();
+    }
+  };
+
   const handleClose = () => {
-    const hasContent = editor?.getText()?.trim().length > 0;
-    if (hasContent) {
+    if (draftSaveState.current.dirty) {
+      pendingCloseRef.current = 'close';
       setShowLeaveConfirmation(true);
     } else {
       onClose?.();
     }
   };
 
-  const confirmLeave = () => {
+  // Guard: Save draft, then complete the close/navigation — a FAILED save
+  // keeps the guard open (the toast explains; nothing is lost).
+  const saveAndLeave = async () => {
+    const saved = await saveDraft({ manual: true });
+    if (!saved) return;
     setShowLeaveConfirmation(false);
-    onClose?.();
+    resolvePendingClose('proceed');
+  };
+
+  // Guard: Discard = leave WITHOUT saving. Writes nothing; deliberately
+  // does not delete drafts the user explicitly saved earlier (or opened
+  // from the Drafts folder) — discarding drops the unsaved EDITS, it does
+  // not destroy previously persisted mail. A never-saved compose leaves
+  // nothing behind on the server because nothing was ever written.
+  const discardAndLeave = () => {
+    setShowLeaveConfirmation(false);
+    resolvePendingClose('proceed');
   };
 
   const cancelLeave = () => {
     setShowLeaveConfirmation(false);
+    resolvePendingClose('reset');
   };
+
+  // Wrapping-dialog guard (create-email's esc/X): returns true when closing
+  // is safe, else opens the blocking dialog and returns false.
+  useEffect(() => {
+    if (!closeGuardRef) return;
+    closeGuardRef.current = () => {
+      if (!draftSaveState.current.dirty) return true;
+      pendingCloseRef.current = 'close';
+      setShowLeaveConfirmation(true);
+      return false;
+    };
+    return () => {
+      closeGuardRef.current = null;
+    };
+  }, [closeGuardRef]);
+
+  // Route-navigation guard: leaving the page with unsaved content blocks
+  // and opens the same dialog.
+  const navBlocker = useBlocker(hasUnsavedChanges);
+  useEffect(() => {
+    if (navBlocker.state === 'blocked') {
+      pendingCloseRef.current = navBlocker;
+      setShowLeaveConfirmation(true);
+    }
+  }, [navBlocker, navBlocker.state]);
 
   // Component unmount protection
   useEffect(() => {
@@ -1125,21 +1198,35 @@ export function EmailComposer({
         </div>
       </div>
 
-      <Dialog open={showLeaveConfirmation} onOpenChange={setShowLeaveConfirmation}>
+      {/* Blocking close guard: fires on the X, on Escape, and on navigating
+          away whenever the compose holds UNSAVED content. Dismissing the
+          dialog itself (esc/overlay) is Cancel. */}
+      <Dialog
+        open={showLeaveConfirmation}
+        onOpenChange={(open) => {
+          if (!open) cancelLeave();
+        }}
+      >
         <DialogContent showOverlay className="z-99999 sm:max-w-[425px]">
           <DialogHeader>
-            <DialogTitle>Discard message?</DialogTitle>
+            <DialogTitle>Save this draft?</DialogTitle>
             <DialogDescription>
-              You have unsaved changes in your email. Are you sure you want to leave? Your changes
-              will be lost.
+              You have unsaved changes. Save them as a draft, discard them, or keep editing.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="mt-2">
             <Button variant="outline" onClick={cancelLeave} className="cursor-pointer">
-              Stay
+              Cancel
             </Button>
-            <Button variant="destructive" onClick={confirmLeave} className="cursor-pointer">
-              Leave
+            <Button
+              variant="destructive"
+              onClick={discardAndLeave}
+              className="cursor-pointer"
+            >
+              Discard
+            </Button>
+            <Button onClick={() => void saveAndLeave()} disabled={isSavingDraft} className="cursor-pointer">
+              {isSavingDraft ? 'Saving…' : 'Save draft'}
             </Button>
           </DialogFooter>
         </DialogContent>

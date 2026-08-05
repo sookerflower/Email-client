@@ -11,7 +11,7 @@ import { EmailComposer } from './email-composer';
 import { useSession } from '@/lib/auth-client';
 import { serializeFiles } from '@/lib/schemas';
 import { useDraft } from '@/hooks/use-drafts';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 
 import type { Attachment } from '@/types';
 import { useQueryState } from 'nuqs';
@@ -38,6 +38,7 @@ export function CreateEmail({
   initialCc = '',
   initialBcc = '',
   draftId: propDraftId,
+  closeGuardRef: closeGuardRefProp,
 }: {
   initialTo?: string;
   initialSubject?: string;
@@ -45,6 +46,14 @@ export function CreateEmail({
   initialCc?: string;
   initialBcc?: string;
   draftId?: string | null;
+  /**
+   * Shared close-guard ref. The sidebar's ComposeButton owns the Dialog
+   * whose esc/overlay/X actually close the compose modal, so it passes its
+   * ref down here; the composer installs the guard into it and BOTH
+   * interception points (ComposeButton's onOpenChange and this component's
+   * own esc chip) consult the same function.
+   */
+  closeGuardRef?: MutableRefObject<(() => boolean) | null>;
 }) {
   const { data: session } = useSession();
 
@@ -176,7 +185,20 @@ export function CreateEmail({
   // Cast draft to our extended type that includes CC and BCC
   const typedDraft = draft as unknown as DraftType;
 
+  // Close guard installed by the composer: consulted before the wrapping
+  // dialog closes (esc, the X/esc chip, overlay). When the compose holds
+  // unsaved content the composer opens its blocking Save/Discard/Cancel
+  // dialog and this returns false — the wrapper must then stay open; the
+  // guard's buttons finish the close through the composer's onClose.
+  // When a parent (the sidebar's ComposeButton) owns the real Dialog, its
+  // ref is used so both interception points share one guard.
+  const ownCloseGuard = useRef<(() => boolean) | null>(null);
+  const composerCloseGuard = closeGuardRefProp ?? ownCloseGuard;
+
   const handleDialogClose = (open: boolean) => {
+    if (!open && composerCloseGuard.current && !composerCloseGuard.current()) {
+      return; // guard dialog opened; dialog stays until the user chooses
+    }
     setIsComposeOpen(open ? 'true' : null);
     if (!open) {
       setDraftId(null);
@@ -228,6 +250,7 @@ export function CreateEmail({
             <EmailComposer
               key={typedDraft?.id || undoEmailData?.to?.join(',') || 'composer'}
               className="mb-12 rounded-2xl border"
+              closeGuardRef={composerCloseGuard}
               onSendEmail={handleSendEmail}
               initialMessage={
                 undoEmailData?.message || 

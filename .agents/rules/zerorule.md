@@ -56,6 +56,10 @@ Run and report all of these before calling any step done:
   231, 36, and 16 at different times — the spread was measurement method
   (incremental tsbuildinfo runs re-check only a subset; stale docs), not
   code. Delete the tsbuildinfo first or the number is meaningless.
+  Run tsc ALONE, never in parallel with suites or other builds: a
+  memory-starved parallel run produced a bogus "0" (tsc died silently,
+  grep counted nothing) — the fourth wrong number from this floor, and
+  every one was measurement method, not code.
 - Full unit suite, not one directory. Baseline 31 passing.
 - Both E2E suites, on BOTH backends: `e2e-mail` and `e2e-realtime`, GreenMail
   and `--real`. 35 legs standing. `--real` windows are 120s.

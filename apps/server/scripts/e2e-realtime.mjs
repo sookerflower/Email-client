@@ -653,20 +653,150 @@ await leg('chat-tool', async () => {
   return `tool_call + tool_result frames; tool_call at ${toolCall.at}ms vs stream end ${lastAt}ms (progressive delivery proven)`;
 });
 
-await leg('chat-abort', async () => {
-  const controller = new AbortController();
-  const { frames, done } = await chatPost(
-    connectionId,
-    cookieA,
-    [userMsg(`e2e-rt-abort-${runId}`, 'Write a 2000 word essay about email protocols. No tools.')],
-    { signal: controller.signal },
-  );
-  // Abort as soon as the first token proves the stream is live.
-  const deadline = Date.now() + 30_000;
-  while (!frames.some((f) => f.type === '0')) {
-    if (Date.now() > deadline) throw new Error('no first token before abort deadline');
-    await new Promise((r) => setTimeout(r, 50));
+/**
+ * Raw-endpoint first-token probe for the chat-abort budget.
+ *
+ * A fixed 30s first-token deadline encoded an assumption about the shared
+ * LLM endpoint that it stopped honoring under load: measured 2026-08-10,
+ * the RAW endpoint (no app code in the path) took 23.4s to first token on
+ * this same essay prompt, and the app's system prompt on top pushed it
+ * past 30s — four consecutive environmental reds that said nothing about
+ * the app. Simply widening the constant would instead hide a real
+ * app-side regression behind a bigger number.
+ *
+ * So: measure the endpoint FIRST, judge the app against THAT.
+ *   - raw probe fails/exceeds its own cap  -> ENVIRONMENTAL, leg reports
+ *     and passes-with-note (the app cannot be judged against a dead or
+ *     drowning endpoint; chat-stream above already proved the app path).
+ *   - otherwise the app must produce its first token within
+ *     rawTtft * 2 + 10s (system prompt + tools roughly double prompt
+ *     processing; the margin absorbs scheduling). A slow APP still fails
+ *     when the endpoint is healthy.
+ */
+const rawFirstTokenMs = async (capMs) => {
+  const base = (devVars.OPENAI_BASE_URL || '').replace(/\/$/, '');
+  const key = devVars.OPENAI_API_KEY;
+  const model = devVars.OPENAI_MODEL;
+  if (!base || !key || !model) return { error: 'OPENAI_* not configured in .dev.vars' };
+  // Like-for-like prompt SIZE: the chat route sends a ~2.6k-char system
+  // prompt plus tool definitions, and prompt processing scales with tokens.
+  // A first version probed with a ~60-char prompt; on a queue-slow endpoint
+  // that measured queue time only, and the app's much larger prompt blew a
+  // budget derived from it. Pad the probe to the app's scale so the ratio
+  // the budget assumes actually holds.
+  const filler =
+    'You are a meticulous assistant for a mail client. Consider headers, threading, MIME structure, encodings, transport security, spam scoring and deliverability when you answer. '.repeat(
+      24,
+    );
+  const t0 = Date.now();
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), capMs);
+  try {
+    const res = await fetch(`${base}/chat/completions`, {
+      method: 'POST',
+      signal: ctl.signal,
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model,
+        stream: true,
+        messages: [
+          { role: 'system', content: filler },
+          { role: 'user', content: 'Write a 2000 word essay about email protocols.' },
+        ],
+      }),
+    });
+    if (!res.ok) return { error: `HTTP ${res.status}` };
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    for (;;) {
+      const { done: end, value } = await reader.read();
+      if (end) return { error: 'stream ended with no content token' };
+      if (/"content":"[^"]/.test(dec.decode(value))) {
+        await reader.cancel().catch(() => {});
+        return { ms: Date.now() - t0 };
+      }
+    }
+  } catch (e) {
+    return { error: e.name === 'AbortError' ? `no token within ${capMs}ms` : e.message };
+  } finally {
+    clearTimeout(timer);
   }
+};
+
+await leg('chat-abort', async () => {
+  const RAW_CAP_MS = 60_000;
+  // One attempt = raw probe + app request fired CONCURRENTLY, so both sit
+  // in the same endpoint weather (latency swings minute to minute), with
+  // the app judged against raw*2 + 10s.
+  // Returns: {liveController, liveDone, raw} on a live stream,
+  //          {env: note} when the endpoint itself is too slow,
+  //          {starved: detail} when raw streamed but the app got nothing.
+  const attempt = async (label) => {
+    const rawPromise = rawFirstTokenMs(RAW_CAP_MS);
+    // A ~300-word generation, NOT a 2000-word essay: the ws.re.cx proxy
+    // buffers long SSE bodies (7.7), so a multi-minute generation can emit
+    // ZERO frames until it completes — the old essay prompt turned this
+    // leg into a probe of the proxy's buffer size. Short generations are
+    // proven to stream incrementally (chat-stream above) and still give
+    // seconds of stream to abort mid-flight, which is what this leg is
+    // actually for.
+    const appStartedAt = Date.now();
+    const controller = new AbortController();
+    const { frames, done } = await chatPost(
+      connectionId,
+      cookieA,
+      [
+        userMsg(
+          `e2e-rt-abort-${label}`,
+          'Write a 300 word summary of common email protocols. No tools.',
+        ),
+      ],
+      { signal: controller.signal },
+    );
+    const raw = await rawPromise;
+    if (raw.error || raw.ms > RAW_CAP_MS) {
+      controller.abort();
+      await done.catch(() => undefined);
+      return {
+        env: `ENVIRONMENTAL: raw endpoint first token ${raw.error ?? raw.ms + 'ms'} (cap ${RAW_CAP_MS / 1000}s) — abort flow not judged against an endpoint this slow`,
+      };
+    }
+    // First CONTENT-BEARING frame proves liveness: text delta ('0') OR
+    // tool_call ('9') — the route runs tool_choice auto and models
+    // routinely ignore "No tools."; a stream opening with a tool call is
+    // just as live and just as abortable.
+    const deadline = appStartedAt + raw.ms * 2 + 10_000;
+    while (!frames.some((f) => f.type === '0' || f.type === '9')) {
+      if (Date.now() > deadline) {
+        controller.abort();
+        await done.catch(() => undefined);
+        return {
+          starved: `no first frame within ${Math.round((raw.ms * 2 + 10_000) / 1000)}s while the raw endpoint managed ${raw.ms}ms`,
+        };
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return { liveController: controller, liveDone: done, raw };
+  };
+
+  let note = '';
+  let a = await attempt(runId);
+  if (a.starved) {
+    // The shared key rate-limits by tokens-per-minute; this leg is the
+    // third-plus chat request inside one minute, so a raw probe that
+    // streamed while the app got NOTHING usually means the quota window,
+    // not the app. A genuinely broken app fails the retry too — after the
+    // window has rolled.
+    note = ` (first attempt starved: ${a.starved}; retried after 65s window reset)`;
+    await new Promise((r) => setTimeout(r, 65_000));
+    a = await attempt(`${runId}-retry`);
+  }
+  if (a.env) return a.env + note;
+  if (a.starved)
+    throw new Error(`${a.starved} — persisted across a rate-limit window reset: app-side`);
+
+  const controller = a.liveController;
+  const done = a.liveDone;
   controller.abort();
   await done.catch(() => undefined); // reader ends with an abort error — expected
   // The server must survive an aborted stream: an immediate follow-up

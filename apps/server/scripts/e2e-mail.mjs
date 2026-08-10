@@ -463,6 +463,43 @@ await leg('sent-sync', async () => {
   );
 });
 
+// INHERITED-STATE variant of sent-sync: NO manual enqueue. The leg above
+// enqueues sync-folder:sent itself, so it proves the sync works when
+// triggered — it can never prove anything triggers it on the interactive
+// timeline. That gap hid the real-user bug: an interactive send was
+// invisible in Sent for up to 10 minutes (the repeatable's period), and
+// forceSync made it worse before the erasure fix. This leg drives the flow
+// the way a user does — send, then just wait — and holds the app to an
+// event-driven window (the /rpc post-send hook; measured 2.7 s on
+// GreenMail), far below the repeatable's period, so a regression to
+// timer-only visibility fails loudly.
+await leg('sent-after-send', async () => {
+  const subject = `e2e send visibility ${runId}`;
+  await trpc('mail.send', {
+    mutationBody: {
+      to: [{ email: mode.email, name: 'e2e' }],
+      subject,
+      message: `<p>${subject}</p>`,
+      attachments: [],
+    },
+  });
+  const windowMs = REAL ? 120_000 : 60_000;
+  const deadline = Date.now() + windowMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const sent = await trpc('mail.listThreads', { query: { folder: 'sent', maxResults: 20 } });
+    for (const t of (sent?.threads ?? []).slice(0, 10)) {
+      const thread = await trpc('mail.get', { query: { id: t.id } });
+      if (thread?.latest?.subject === subject) {
+        return `"${subject}" visible in Sent with NO manual enqueue`;
+      }
+    }
+  }
+  throw new Error(
+    `"${subject}" not in Sent view after ${windowMs / 1000}s with no manual enqueue — nothing on the interactive timeline triggers the sent sync`,
+  );
+});
+
 if (SKIP_IDLE) {
   console.log('[e2e] SKIP idle-push (--skip-idle)');
 } else {

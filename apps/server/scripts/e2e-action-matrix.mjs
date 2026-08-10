@@ -1102,6 +1102,176 @@ if (ok && !fatal) {
   }
 }
 
+// ------------------------------------------------ FORCE-RESYNC SURVIVAL LEGS
+//
+// The db-wipe legs above assert inbox/trash/keyword survival ONLY — which is
+// exactly why forceReSync erasing Sent (invisible until the 10-minute
+// repeatable), Archive (PERMANENTLY — nothing re-listed the archive folder)
+// and Snoozed (permanently, PLUS wake rows left orphaned for the unsnooze
+// sweep to act on blindly) went unseen through a matrix built to catch
+// precisely this class. These legs close that hole: each of the three states
+// is built the way the APP builds it, then must survive mail.forceSync.
+//
+// The orphan assertion is scoped to THIS run's wake row (assert what the
+// code controls — ambient rows from other runs are not this leg's claim).
+if (ok && !fatal) {
+  const subjArch = S('WipeArch');
+  const subjSnooze = S('WipeSnooze');
+  const subjSent = S('WipeSent');
+
+  const prepared = await hardLeg('seed:resync-survival', async () => {
+    await seed(subjArch, 5);
+    await seed(subjSnooze, 4);
+    const archTid = await findThread(subjArch);
+    const snoozeTid = await findThread(subjSnooze);
+    // Archive and snooze exactly as the UI does.
+    await trpc('mail.modifyLabels', {
+      mutationBody: { threadId: [archTid], addLabels: [], removeLabels: ['INBOX'] },
+    });
+    await trpc('mail.snoozeThreads', {
+      mutationBody: { ids: [snoozeTid], wakeAt: new Date(Date.now() + 7_200_000).toISOString() },
+    });
+    // Sent fixture via a real app send. SETUP may lean on a manual enqueue
+    // so the pre-state exists even on builds without the post-send sync
+    // hook — the survival claim here is about forceSync, not indexing.
+    await trpc('mail.send', {
+      mutationBody: {
+        to: [{ email: mode.email, name: 'e2e' }],
+        subject: subjSent,
+        message: `<p>${subjSent}</p>`,
+        attachments: [],
+      },
+    });
+    await new Promise((r) => setTimeout(r, 12_000));
+    const { Queue } = await import('bullmq');
+    const IORedis = (await import('ioredis')).default;
+    const redisConn = new IORedis(process.env.QUEUE_REDIS_URL ?? 'redis://127.0.0.1:6379', {
+      maxRetriesPerRequest: null,
+    });
+    const syncQueue = new Queue('mail-sync', { connection: redisConn });
+    await syncQueue.add('sync-folder', { connectionId, folder: 'sent' });
+    await syncQueue.close();
+    redisConn.disconnect();
+
+    let sentTid = null;
+    const deadline = Date.now() + (REAL ? 180_000 : 90_000);
+    for (;;) {
+      const sent = await trpc('mail.listThreads', { query: { folder: 'sent', maxResults: 30 } });
+      for (const t of sent?.threads ?? []) {
+        const th = await trpc('mail.get', { query: { id: t.id } }).catch(() => null);
+        if (th?.latest?.subject === subjSent) sentTid = t.id;
+      }
+      if (sentTid) break;
+      if (Date.now() > deadline) throw new Error('sent fixture never indexed (setup)');
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+    // Pin the pre-state at level (c) — the SERVER, not the index. The
+    // ARCHIVE label can appear in the index (ledger-derived continuation)
+    // moments before the IMAP MOVE itself lands; asserting survival against
+    // a forceSync that ran before the server state settled produced a false
+    // red on first execution. Poll until BOTH messages are physically in
+    // the archive folder.
+    const preDeadline = Date.now() + 90_000;
+    for (;;) {
+      const [sArch, sSnooze] = [await server(subjArch), await server(subjSnooze)];
+      if (/archive/i.test(sArch.folder ?? '') && /archive/i.test(sSnooze.folder ?? '')) break;
+      if (Date.now() > preDeadline)
+        throw new Error(
+          `pre-state: fixtures not in archive folder (arch=${sArch.folder}, snooze=${sSnooze.folder})`,
+        );
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+    const preSnooze = index(snoozeTid);
+    if (!preSnooze.labels.includes('SNOOZED'))
+      throw new Error(`pre-state: SNOOZED missing (${preSnooze.labels.join(',')})`);
+    return { archTid, snoozeTid, sentTid, toString: () => 'archived + snoozed + sent pre-state ready' };
+  });
+
+  if (prepared) {
+    await trpc('mail.forceSync', { mutationBody: null });
+
+    // Resolve by SUBJECT through the app views, never by a pinned thread id:
+    // the seed-time id does not survive the move+resync round trip (thread
+    // ids re-derive; the id-stability caveat on rawMessage documents this),
+    // and a user finds their mail by looking at the view, not by an id. A
+    // first version of these legs pinned the seed-time id and went red
+    // against a HEALTHY index — the thread was present under its canonical
+    // id with the right labels while index(<stale id>) said "gone".
+    //
+    // Poll to a deadline like the db-wipe legs: continuations and worker
+    // syncs converge seconds after the route returns. The window stays FAR
+    // below the 10-minute repeatable, so a pre-fix build (which never
+    // re-lists archive at all, and restores sent only via that repeatable)
+    // still goes red here.
+    const findInView = async (folder, subject) => {
+      const list = await trpc('mail.listThreads', { query: { folder, maxResults: 30 } });
+      for (const t of list?.threads ?? []) {
+        const th = await trpc('mail.get', { query: { id: t.id } }).catch(() => null);
+        if (
+          th?.latest?.subject === subject ||
+          (th?.messages ?? []).some((m) => m.subject === subject)
+        )
+          return t.id;
+      }
+      return null;
+    };
+    const survDeadline = Date.now() + 90_000;
+    let archId = null;
+    let snoozeId = null;
+    let sentId = null;
+    for (;;) {
+      archId = archId ?? (await findInView('archive', subjArch));
+      snoozeId = snoozeId ?? (await findInView('snoozed', subjSnooze));
+      sentId = sentId ?? (await findInView('sent', subjSent));
+      if ((archId && snoozeId && sentId) || Date.now() > survDeadline) break;
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+
+    record(
+      'resync-survival',
+      'ARCHIVED thread survives forceSync (archive view)',
+      'thread findable in the archive view by subject',
+      archId ?? '(absent)',
+      !!archId,
+      'forceReSync must re-list the archive folder — before the fix NOTHING did, so this loss was permanent.',
+    );
+    record(
+      'resync-survival',
+      'SNOOZED thread survives forceSync (snoozed view)',
+      'thread findable in the snoozed view by subject',
+      snoozeId ?? '(absent)',
+      !!snoozeId,
+      'SNOOZED is index-only; forceReSync must snapshot and re-apply it — no folder pass can.',
+    );
+    const wakeState = snoozeId
+      ? sql(
+          `select count(*), count(tl.thread_id) from mail0_snooze s left join mail0_thread_label tl on tl.connection_id=s.connection_id and tl.thread_id=s.thread_id and tl.label_id='SNOOZED' where s.connection_id='${connectionId}' and s.thread_id='${snoozeId}'`,
+        )
+      : '(no snoozed thread found)';
+    record(
+      'resync-survival',
+      'wake row not orphaned by forceSync',
+      'wake row present AND its SNOOZED label present (1|1)',
+      wakeState,
+      wakeState === '1|1',
+      'An orphaned wake row makes the unsnooze sweep act on a thread the index no longer has — the documented split-brain corruption. NB the wake row must FOLLOW the re-derived thread id (or the id must be stable); a row keyed to a dead id is an orphan even when the thread survived.',
+    );
+    record(
+      'resync-survival',
+      'SENT thread survives forceSync (sent view)',
+      'thread findable in the sent view by subject',
+      sentId ?? '(absent)',
+      !!sentId,
+      'Before the fix, forceSync blanked the Sent view until the next 10-minute repeatable tick.',
+    );
+
+    // Fixture hygiene: unsnooze so the wake row does not outlive the
+    // message the cleanup below deletes.
+    if (snoozeId)
+      await trpc('mail.unsnoozeThreads', { mutationBody: { ids: [snoozeId] } }).catch(() => {});
+  }
+}
+
 // ---------------------------------------------------------------------- clean
 // Always runs, and matches the fixture PREFIX rather than this run's ids, so a
 // previous crashed run is cleared too.

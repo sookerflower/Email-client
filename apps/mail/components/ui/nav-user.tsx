@@ -149,7 +149,11 @@ export function NavUser() {
       success: () => 'Signed out successfully!',
       error: 'Error signing out',
       async finally() {
-        // await handleClearCache();
+        // Clear the persisted query cache on the way out: the IDB cache
+        // outlives the session, and a survivor from this user becomes the
+        // next user's identity on a shared browser profile (the stale
+        // getDefault → wrong chip + SSE/chat 403 loop bug).
+        await handleClearCache();
         window.location.href = '/login';
       },
     });

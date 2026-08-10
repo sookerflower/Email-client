@@ -12,7 +12,8 @@ import { Analytics as DubAnalytics } from '@dub/analytics/react';
 import { ServerProviders } from '@/providers/server-providers';
 import { ClientProviders } from '@/providers/client-providers';
 import { createTRPCClient, httpBatchLink } from '@trpc/client';
-import { useEffect, type PropsWithChildren } from 'react';
+import { trpcClient } from '@/providers/query-provider';
+import { useEffect, useState, type PropsWithChildren } from 'react';
 import type { AppRouter } from '@zero/server/trpc';
 import { Button } from '@/components/ui/button';
 import { getLocale } from '@/paraglide/runtime';
@@ -52,6 +53,44 @@ export const meta: MetaFunction = () => {
   ];
 };
 
+/**
+ * Resolve the active connection BEFORE mounting the query/persist providers.
+ *
+ * The id is fetched through the module-level trpcClient (a plain
+ * credentialed fetch) so the answer can only come from the server session —
+ * never from the persisted query cache. Feeding the result to
+ * ServerProviders makes the existing scoping mechanism real: the IDB
+ * persister key becomes zero-query-cache-<id> and queryKeyHashFn namespaces
+ * every query by the connection. With the previous hardcoded null, every
+ * user on a browser profile shared one cache, and a stale persisted
+ * connections.getDefault from user A was served as user B's identity
+ * (wrong account chip, SSE/chat 403 loop on A's connectionId).
+ */
+function ResolvedServerProviders({ children }: PropsWithChildren) {
+  // undefined = resolving; null = no session/connection; string = active id.
+  const [connectionId, setConnectionId] = useState<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    trpcClient.connections.getDefault
+      .query()
+      .then((connection) => {
+        if (!cancelled) setConnectionId(connection?.id ?? null);
+      })
+      .catch(() => {
+        // No session / api unreachable: proceed unscoped; the app's own
+        // error handling surfaces the failure on the first real query.
+        if (!cancelled) setConnectionId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (connectionId === undefined) return null;
+  return <ServerProviders connectionId={connectionId}>{children}</ServerProviders>;
+}
+
 export function Layout({ children }: PropsWithChildren) {
   return (
     <html lang={getLocale()} suppressHydrationWarning>
@@ -68,14 +107,14 @@ export function Layout({ children }: PropsWithChildren) {
         <Links />
       </head>
       <body className="antialiased">
-        <ServerProviders connectionId={null}>
+        <ResolvedServerProviders>
           <ClientProviders>{children}</ClientProviders>
           <DubAnalytics
             domainsConfig={{
               refer: 'axmail.dev',
             }}
           />
-        </ServerProviders>
+        </ResolvedServerProviders>
         <ScrollRestoration />
         <Scripts />
       </body>

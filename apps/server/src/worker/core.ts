@@ -549,8 +549,26 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
         return await fn.apply(driver, args);
       });
 
+    // The worker reacting to its own send (sent-view visibility): a
+    // successful create/sendDraft has just appended the message to the Sent
+    // mailbox, so enqueue that folder's sync NOW instead of leaving the copy
+    // invisible until the 10-minute sync-sent-folders repeatable. One hook
+    // at this choke point covers BOTH send paths — the api's direct send and
+    // the outbox job — because each routes its IMAP work through /rpc.
+    // Fire-and-forget with a loud warn: the repeatable still converges.
+    const enqueueSentSyncAfterSend = () => {
+      if (!auth.imap || !auth.connectionId) return;
+      if (method !== 'create' && method !== 'sendDraft') return;
+      void opts
+        .enqueueSync?.(auth.connectionId, 'sent')
+        .catch((error: Error) =>
+          console.warn(`[mail-worker] post-${method} sent-sync enqueue failed:`, error.message),
+        );
+    };
+
     try {
       const result = await runMethod();
+      enqueueSentSyncAfterSend();
       return send(res, 200, { result: result ?? null });
     } catch (error) {
       let e = error as Error & { code?: string };
@@ -572,6 +590,7 @@ export function startMailWorker(opts: MailWorkerOptions): MailWorker {
         try {
           const result = await runMethod();
           console.log(`[mail-worker] ${method} recovered after reconnect`);
+          enqueueSentSyncAfterSend();
           return send(res, 200, { result: result ?? null });
         } catch (retryError) {
           e = retryError as Error & { code?: string };

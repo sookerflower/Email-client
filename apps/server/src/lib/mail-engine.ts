@@ -1295,6 +1295,13 @@ export class MailEngine {
 
   async forceReSync() {
     this.syncInProgress.clear();
+    // SNOOZED snapshot BEFORE the wipe. SNOOZED is index-only by design
+    // (no IMAP representation), so no folder pass below can ever restore
+    // it -- without this snapshot a forced resync silently un-snoozed
+    // every thread while its wake row survived in mail0_snooze, and the
+    // unsnooze sweep then acted on threads the index no longer knew
+    // (the split-brain corruption documented at the top of this file).
+    const snoozedIds = await listThreadIdsByLabel(this.connectionId, 'SNOOZED');
     await clearIndex(this.connectionId);
     // From-scratch means from scratch: ladder cursors and the UID ledger go
     // with the index, or the next incremental sync would see "no changes"
@@ -1319,6 +1326,45 @@ export class MailEngine {
     await this.syncFolderOnce('spam').catch((error) =>
       console.warn(`[MailEngine:${this.connectionId}] forceReSync spam pass failed:`, error?.message),
     );
+    // Sent and Archive must be rebuilt for the same reason as Trash/Junk
+    // above: nothing else re-lists them on the interactive timeline. Before
+    // these passes, a forced resync ERASED the Sent view until the next
+    // 10-minute repeatable tick, and erased Archive PERMANENTLY -- no code
+    // path anywhere re-listed the archive folder, so archived (and snoozed,
+    // see below) threads vanished from the app while their messages sat on
+    // the server. Same non-fatal shape: a fresh account may lack the folder.
+    await this.syncFolderOnce('sent').catch((error) =>
+      console.warn(`[MailEngine:${this.connectionId}] forceReSync sent pass failed:`, error?.message),
+    );
+    await this.syncFolderOnce('archive').catch((error) =>
+      console.warn(
+        `[MailEngine:${this.connectionId}] forceReSync archive pass failed:`,
+        error?.message,
+      ),
+    );
+    // Re-apply SNOOZED to every snapshotted thread the passes above
+    // recovered (snoozed messages live in the archive mailbox -- the INBOX
+    // removal that accompanies a snooze moves them there -- so the archive
+    // pass is what brings their threads back). Index-only catch-up, same
+    // contract as the keptIndexOnly carry-forward in the refresh path.
+    // Threads that did NOT come back get their wake rows pruned LOUDLY:
+    // a wake row without a thread is the orphan the unsnooze sweep would
+    // otherwise act on blindly.
+    const lostSnoozes: string[] = [];
+    for (const threadId of snoozedIds) {
+      const recovered = (await getThreadLabels(this.connectionId, threadId)).length > 0;
+      if (recovered) {
+        await this.applyIndexLabelsFromSync(threadId, ['SNOOZED'], []);
+      } else {
+        lostSnoozes.push(threadId);
+      }
+    }
+    if (lostSnoozes.length) {
+      await snoozeStore.delete(this.connectionId, lostSnoozes);
+      console.error(
+        `[MailEngine:${this.connectionId}] forceReSync: ${lostSnoozes.length} snoozed thread(s) not recoverable from the server; pruned their wake rows (ids: ${lostSnoozes.join(', ')})`,
+      );
+    }
     // Record the cursor this resync was built against (Phase 6.3). Leaving
     // folder_sync_state empty until the next JOB sync both forfeits the 6.2
     // ladder right after every forceSync AND races concurrent job syncs'

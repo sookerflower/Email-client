@@ -126,6 +126,10 @@ async function processSendJob(job: Job): Promise<unknown> {
     // but never resend. Loud, for the human to reconcile.
     console.warn(`[jobs] send ${messageId}: sent, but row was cancelled mid-send (not resending)`);
   }
+  // Sent-folder visibility for this send is handled at the /rpc choke point
+  // (core.ts): engine.create/sendDraft above route their IMAP work through
+  // /rpc, where a successful create|sendDraft enqueues sync-folder:sent.
+  // One hook covers BOTH send paths (this job and the api's direct send).
   return { sent: true };
 }
 

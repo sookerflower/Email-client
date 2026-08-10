@@ -546,6 +546,27 @@ export class MailEngine {
       }
     }
 
+    // 2a. AWAITED fast index commit (order-probe ruling, option iii).
+    //
+    // 4e6d5ba1 moved the whole index rebuild off the request path, which
+    // silently widened publish-after-commit into publish-after-SERVER-commit:
+    // the mutation acked (and beacons from OTHER publishers -- e.g. the
+    // worker's IDLE-triggered sync reacting to our own STORE -- could land)
+    // seconds before the index held the changed labels, so a client acting
+    // on a beacon read pre-mutation state. e2e-realtime's order-probe leg
+    // caught exactly this.
+    //
+    // The fix commits ONLY the mutated labels to the index before returning;
+    // the full folder re-derivation below stays in the background. This is
+    // within applyIndexLabelsFromSync's sync-side contract: the server write
+    // in step 1 already happened, the index is catching up to it. Cost is a
+    // few Postgres statements per thread (measured, see commit message) --
+    // the expensive part 4e6d5ba1 deferred (getThreadFolders + driver.get
+    // refreshes, sequential IMAP round trips) stays deferred.
+    for (const threadId of threadIds) {
+      await this.applyIndexLabelsFromSync(threadId, addLabels, removeLabels);
+    }
+
     // 2. Rebuild the index from server truth -- as a BACKGROUND CONTINUATION.
     //
     // The caller stops waiting HERE. Measured cost of what follows on

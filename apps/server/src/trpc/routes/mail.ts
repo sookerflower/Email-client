@@ -8,6 +8,7 @@ import {
   deleteAllSpam,
   reSyncThread,
 } from '../../lib/server-utils';
+import { countIndexedThreads, getFolderSyncRow } from '../../lib/mail-index';
 import {
   IGetThreadResponseSchema,
   IGetThreadsResponseSchema,
@@ -167,8 +168,25 @@ export const mailRouter = router({
       }
 
       if (threadsResponse.threads.length === 0 && folder === FOLDERS.INBOX && !q) {
+        // Recovery trigger, gated on GENUINE emptiness — not on a view
+        // rendering zero rows mid-sync (re-entrancy ruling). A page can be
+        // empty while the index is half-built, and firing then started a
+        // second clearIndex+rebuild inside a running one. Fire only when:
+        //   - the whole INDEX is empty for this connection (not just a page),
+        //   - a COMPLETED inbox sync is on record (cursor row exists — no
+        //     row means the initial sync owns the situation, not us), and
+        //   - that record says the server actually has mail (uidNext > 1 —
+        //     rebuilding a genuinely empty mailbox every cooldown recovers
+        //     nothing).
+        const [indexedCount, inboxSync] = await Promise.all([
+          countIndexedThreads(activeConnection.id),
+          getFolderSyncRow(activeConnection.id, 'inbox'),
+        ]);
+        const genuinelyEmpty =
+          indexedCount === 0 && !!inboxSync && Number(inboxSync.uidNext ?? 0) > 1;
+
         // 30s resync cooldown, armed atomically in Redis (was a KV get/put pair).
-        const shouldResync = await checkAndSetCooldown(`resync_${activeConnection.id}`, 30);
+        const shouldResync = genuinelyEmpty && (await checkAndSetCooldown(`resync_${activeConnection.id}`, 30));
 
         if (shouldResync) {
           getZeroAgent(activeConnection.id, executionCtx)

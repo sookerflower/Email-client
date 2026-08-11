@@ -1293,7 +1293,38 @@ export class MailEngine {
     );
   }
 
-  async forceReSync() {
+  private forceReSyncInFlight: Promise<void> | null = null;
+
+  /**
+   * COALESCE concurrent cycles — never queue, never interleave.
+   *
+   * Nothing else can serialize two cycles: the per-account /rpc lock
+   * covers one driver METHOD, not a multi-call rebuild (and holding it
+   * for a whole cycle would starve every other op on the account). Two
+   * interleaved cycles are the 6.2 concurrency shape again — one cycle's
+   * clearIndex landing inside the other's rebuild. Proven damage (probe,
+   * 2026-08-10, first overlapped pair): cycle B's SNOOZED snapshot read
+   * the index in A's post-clear window, saw nothing, judged the snooze
+   * "not recoverable" and PRUNED its wake row while the label survived —
+   * a thread parked in Snoozed forever that will never wake.
+   *
+   * A joiner gets the RUNNING cycle's promise instead of a second cycle:
+   * back-to-back full rebuilds of an already-correct mailbox are wasted
+   * work (coalesce-not-queue ruling). Complete coverage without new lock
+   * granularity: every forceReSync caller (explicit route + empty-inbox
+   * auto-trigger) resolves through the api process's memoized per-
+   * connection engine, and the worker never calls forceReSync.
+   */
+  forceReSync(): Promise<void> {
+    if (this.forceReSyncInFlight) return this.forceReSyncInFlight;
+    const run = this.runForceReSync().finally(() => {
+      this.forceReSyncInFlight = null;
+    });
+    this.forceReSyncInFlight = run;
+    return run;
+  }
+
+  private async runForceReSync() {
     this.syncInProgress.clear();
     // SNOOZED snapshot BEFORE the wipe. SNOOZED is index-only by design
     // (no IMAP representation), so no folder pass below can ever restore

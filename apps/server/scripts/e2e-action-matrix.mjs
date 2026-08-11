@@ -1272,6 +1272,119 @@ if (ok && !fatal) {
   }
 }
 
+// -------------------------------------------- FORCE-RESYNC OVERLAP LEG
+//
+// Two concurrent forceReSync cycles on one connection must COALESCE, not
+// interleave. Un-coalesced, one cycle's clearIndex lands inside the other's
+// rebuild (the 6.2 concurrency shape): proven damage on the FIRST
+// overlapped pair pre-fix — cycle B's SNOOZED snapshot read the index in
+// A's post-clear window, judged the snooze unrecoverable, and PRUNED its
+// wake row while the label survived: a thread parked in Snoozed forever
+// that never wakes. Both callers (explicit forceSync + the empty-inbox
+// auto-trigger) resolve through the api's memoized per-connection engine,
+// so instance-level coalescing is the whole guarantee — this leg is its
+// standing proof.
+if (ok && !fatal) {
+  const subjOverlap = S('OverlapSnooze');
+  const wakeState = (tid) =>
+    sql(
+      `select count(*), count(tl.thread_id) from mail0_snooze s left join mail0_thread_label tl on tl.connection_id=s.connection_id and tl.thread_id=s.thread_id and tl.label_id='SNOOZED' where s.connection_id='${connectionId}' and s.thread_id='${tid}'`,
+    );
+  // Outer-variable pattern (like db-wipe's `tid`): hardLeg returns a
+  // BOOLEAN, not the callback's value — a first version used its return as
+  // the thread id and every SQL check ran against thread_id='true'.
+  let overlapTid = null;
+  const seededOverlap = await hardLeg('seed:forcesync-overlap', async () => {
+    await seed(subjOverlap, 3);
+    const tid = await findThread(subjOverlap);
+    overlapTid = tid;
+    await trpc('mail.snoozeThreads', {
+      mutationBody: { ids: [tid], wakeAt: new Date(Date.now() + 7_200_000).toISOString() },
+    });
+    // Settle the SERVER before overlapping: the snooze's archive move must
+    // be listable, or the cycle's archive pass misses it and the prune
+    // fires for a reason that is NOT overlap (the known stale-listing
+    // residual). Poll level (c), then prove ONE cycle survives — the leg
+    // below then measures overlap and only overlap.
+    const settleDeadline = Date.now() + 90_000;
+    for (;;) {
+      const s = await server(subjOverlap);
+      if (/archive/i.test(s.folder ?? '')) break;
+      if (Date.now() > settleDeadline) throw new Error(`snoozed fixture not in archive (${s.folder})`);
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+    await trpc('mail.forceSync', { mutationBody: null });
+    await new Promise((r) => setTimeout(r, 4000));
+    if (wakeState(tid) !== '1|1')
+      throw new Error('single-cycle survival failed in seed — stale-listing residual, not overlap; leg cannot judge coalescing');
+    return tid;
+  });
+
+  if (seededOverlap) {
+    // DIFFERENTIAL oracle: the archive listing goes intermittently stale on
+    // this backend (a cycle can miss a message that is verifiably in the
+    // folder), and a stale listing makes ANY cycle — single or pair —
+    // wrongly prune the wake row. That residual is not what this leg
+    // judges. So on pair damage, re-snooze and run a SINGLE cycle in the
+    // same weather: if the single cycle also damages, it is the stale-
+    // listing residual (KNOWN GAP, named loudly); only damage the pair
+    // produces and the single does not is an overlap/coalescing
+    // regression, and that FAILS.
+    const resnooze = async () => {
+      await trpc('mail.snoozeThreads', {
+        mutationBody: { ids: [overlapTid], wakeAt: new Date(Date.now() + 7_200_000).toISOString() },
+      });
+      await new Promise((r) => setTimeout(r, 5000));
+    };
+    let pairDamage = null;
+    let verdict = '1|1';
+    for (let i = 0; i < 3 && !pairDamage; i++) {
+      await Promise.allSettled([
+        trpc('mail.forceSync', { mutationBody: null }),
+        trpc('mail.forceSync', { mutationBody: null }),
+      ]);
+      await new Promise((r) => setTimeout(r, 4000));
+      verdict = wakeState(overlapTid);
+      if (verdict !== '1|1') pairDamage = `pair ${i + 1}: ${verdict}`;
+    }
+    if (!pairDamage) {
+      record(
+        'forcesync-overlap',
+        'snooze survives 3 pairs of CONCURRENT forceSyncs (wake row + label)',
+        'wakeRow|labeled stays 1|1 through every overlapped pair',
+        verdict,
+        true,
+        'Un-coalesced cycles interleave clearIndex with a running rebuild and prune live wake rows.',
+      );
+    } else {
+      await resnooze();
+      await trpc('mail.forceSync', { mutationBody: null });
+      await new Promise((r) => setTimeout(r, 4000));
+      const single = wakeState(overlapTid);
+      if (single !== '1|1') {
+        recordKnownGap(
+          'forcesync-overlap',
+          'stale archive listing pruned a live wake row (single cycle too)',
+          'differential: single-cycle damage matches pair damage',
+          `pair: ${pairDamage}; single: ${single}`,
+          true,
+          'NOT an overlap regression — a single cycle in the same weather also pruned. The residual is the intermittent stale archive listing feeding forceReSync’s recoverability check; named here rather than hidden.',
+        );
+      } else {
+        record(
+          'forcesync-overlap',
+          'snooze survives 3 pairs of CONCURRENT forceSyncs (wake row + label)',
+          'pair damage must not exceed single-cycle behavior',
+          `pair damaged (${pairDamage}) while a single cycle survived — overlap-specific`,
+          false,
+          'Un-coalesced cycles interleave clearIndex with a running rebuild and prune live wake rows — damage a single cycle does not produce.',
+        );
+      }
+    }
+    await trpc('mail.unsnoozeThreads', { mutationBody: { ids: [overlapTid] } }).catch(() => {});
+  }
+}
+
 // ---------------------------------------------------------------------- clean
 // Always runs, and matches the fixture PREFIX rather than this run's ids, so a
 // previous crashed run is cleared too.

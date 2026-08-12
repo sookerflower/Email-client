@@ -135,6 +135,10 @@ const FIXTURE_PREFIXES = [
   'e2e idle',
   'e2e send',
   'e2e scheduled',
+  // Equivalence-leg fixtures (eqv keep/del/new/idless). Absent from this
+  // list they leaked past every sweep — runId-scoped and past-dated, so
+  // harmless to the oracle, but they accumulated silently in GreenMail.
+  'eqv',
 ];
 
 const legs = [];
@@ -690,6 +694,21 @@ await leg('incremental-equivalence', async () => {
     const delUid = await findUid(delSubject);
     await client.messageFlagsAdd(String(keepUid), ['\\Seen'], { uid: true });
     await client.messageDelete(String(delUid), { uid: true });
+    // ID-less fixture (salvaged from the search-era stash, typed fresh): a
+    // message with NO Message-ID takes the synthetic uid-derived id path —
+    // the one input class whose identity is not header-anchored and, per
+    // the thread-id diagnosis, the class whose snooze wake rows and notes
+    // can orphan on a MOVE. It must ride the SAME incremental machinery,
+    // land IDENTICALLY in both snapshots, and its synthetic id must
+    // round-trip the from-scratch resync. Past-dated per the idle-push
+    // lesson.
+    const idlessSubject = `eqv idless ${runId}`;
+    await client.append(
+      'INBOX',
+      `Date: ${hoursAgoHeader(1)}\r\nSubject: ${idlessSubject}\r\nFrom: e2e@test\r\n\r\nid-less equivalence fixture\r\n`,
+      ['\\Seen'],
+      new Date(Date.now() - 3_600_000),
+    );
     await client.logout();
     await sendRawSmtp(newSubject);
 
@@ -703,13 +722,29 @@ await leg('incremental-equivalence', async () => {
     // live, so nothing here runs full). Poll until the app shows it; the
     // oracle still exercises exclusively the incremental machinery.
     const arrivalDeadline = Date.now() + (REAL ? 240_000 : 90_000);
-    while (!(await subjectInInbox(newSubject, 30))) {
+    while (
+      !(await subjectInInbox(newSubject, 30)) ||
+      !(await subjectInInbox(idlessSubject, 30))
+    ) {
       if (Date.now() > arrivalDeadline)
-        throw new Error('incremental sync missed the new delivery');
+        throw new Error('incremental sync missed the new delivery or the id-less fixture');
       await new Promise((r) => setTimeout(r, 3000));
     }
     row = await syncRow();
     equivalenceModeSeen = row?.sync_mode ?? null;
+
+    // The id-less fixture's SYNTHETIC id (folder+uidValidity+uid) must be
+    // the same object before and after the from-scratch resync — subject
+    // lines alone cannot see id drift, and id drift is exactly what
+    // orphans wake rows and notes for this input class.
+    const idlessThreadId = async () => {
+      for (const t of (await listInbox()).threads ?? []) {
+        const th = await trpc('mail.get', { query: { id: t.id } });
+        if (th?.latest?.subject === idlessSubject) return t.id;
+      }
+      return null;
+    };
+    const idlessIdA = await idlessThreadId();
 
     // Snapshot A (incremental result). On --real, restrict to this run's
     // subjects so an unrelated real-mailbox arrival can't flake the diff.
@@ -720,6 +755,8 @@ await leg('incremental-equivalence', async () => {
     if (!keepLine) throw new Error('flag-flipped thread missing');
     if (keepLine.includes('UNREAD'))
       throw new Error('incremental sync missed the \\Seen flag flip');
+    if (!snapshotA.some((l) => l.startsWith(`${idlessSubject}|`)))
+      throw new Error('id-less fixture missing from the incremental snapshot');
 
     // From-scratch full resync, then snapshot B. The oracle.
     await trpc('mail.forceSync', { mutationBody: null });
@@ -732,7 +769,13 @@ await leg('incremental-equivalence', async () => {
         `incremental != full-resync.\n  incremental: ${a}\n  full:        ${b}`,
       );
     }
-    return `${snapshotA.length} thread lines identical incremental vs from-scratch (mode=${equivalenceModeSeen})`;
+    const idlessIdB = await idlessThreadId();
+    if (!idlessIdA || idlessIdA !== idlessIdB) {
+      throw new Error(
+        `id-less synthetic thread id diverged across resync: incremental=${idlessIdA} full=${idlessIdB}`,
+      );
+    }
+    return `${snapshotA.length} thread lines identical incremental vs from-scratch (mode=${equivalenceModeSeen}); id-less synthetic id stable (${idlessIdA?.slice(0, 12)}…)`;
   } finally {
     await sql.end();
   }

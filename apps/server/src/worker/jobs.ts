@@ -30,6 +30,7 @@ import {
   type SyncFolderJobData,
 } from '../lib/queue';
 import { toAttachmentFiles, type SerializedAttachment } from '../lib/attachments';
+import { findOrphanSnoozeThreadIds } from '../lib/mail-index';
 import { connection as connectionSchema } from '../db/schema';
 import { outboxStore, snoozeStore } from '../lib/stores';
 import { MailEngine } from '../lib/mail-engine';
@@ -179,9 +180,23 @@ async function unsnoozeSweep(): Promise<{ connections: number; threads: number }
   }
   for (const [connectionId, threadIds] of byConnection) {
     try {
+      // Orphan detection (destructive-prune ruling): a wake row whose
+      // thread the index no longer resolves must be REPORTED and skipped,
+      // not acted on blindly (waking a ghost applies labels to nothing)
+      // and not deleted (detect and surface only).
+      const orphans = new Set(await findOrphanSnoozeThreadIds(connectionId));
+      const actionable = threadIds.filter((id) => !orphans.has(id));
+      for (const id of threadIds) {
+        if (orphans.has(id)) {
+          console.error(
+            `[jobs] unsnooze-sweep: ORPHAN wake row on ${connectionId} — thread ${id} is not in the index; row kept, wake skipped (will re-report each sweep until resolved)`,
+          );
+        }
+      }
+      if (!actionable.length) continue;
       const engine = await MailEngine.init(connectionId);
-      await engine.unsnoozeThreadsHandler({ connectionId, threadIds });
-      console.log(`[jobs] unsnooze-sweep: woke ${threadIds.length} thread(s) on ${connectionId}`);
+      await engine.unsnoozeThreadsHandler({ connectionId, threadIds: actionable });
+      console.log(`[jobs] unsnooze-sweep: woke ${actionable.length} thread(s) on ${connectionId}`);
     } catch (error) {
       // Per-connection isolation; the failed batch stays due and the next
       // sweep retries it.

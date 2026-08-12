@@ -1,4 +1,13 @@
-import { thread, label, threadLabel, folderSyncState, folderMessage } from '../db/schema';
+import {
+  thread,
+  label,
+  threadLabel,
+  folderSyncState,
+  folderMessage,
+  snooze,
+  note,
+  connection,
+} from '../db/schema';
 import {
   eq,
   and,
@@ -170,6 +179,39 @@ export const clearIndex = async (connectionId: string): Promise<void> => {
   await db().delete(threadLabel).where(eq(threadLabel.connectionId, connectionId));
   await db().delete(thread).where(eq(thread.connectionId, connectionId));
   await db().delete(label).where(eq(label.connectionId, connectionId));
+};
+
+/**
+ * Orphan inventory (destructive-prune ruling): durable rows keyed by thread
+ * ids the index no longer resolves. DETECTION ONLY — callers report these
+ * loudly and never auto-delete; an orphan that fires into nothing is a
+ * recoverable nuisance, a deleted live row is silent destruction.
+ */
+export const findOrphanSnoozeThreadIds = async (connectionId: string): Promise<string[]> => {
+  const rows = await db()
+    .select({ threadId: snooze.threadId })
+    .from(snooze)
+    .leftJoin(
+      thread,
+      and(eq(thread.connectionId, snooze.connectionId), eq(thread.threadId, snooze.threadId)),
+    )
+    .where(and(eq(snooze.connectionId, connectionId), sql`${thread.threadId} is null`));
+  return rows.map((r) => r.threadId);
+};
+
+/** Notes are user-scoped; a note is orphaned only when NO connection of the
+ * user resolves its thread id. */
+export const findOrphanNoteThreadIds = async (userId: string): Promise<string[]> => {
+  const rows = await db()
+    .select({ threadId: note.threadId })
+    .from(note)
+    .where(
+      and(
+        eq(note.userId, userId),
+        sql`not exists (select 1 from ${thread} t join ${connection} c on c.id = t.connection_id where c.user_id = ${userId} and t.thread_id = ${note.threadId})`,
+      ),
+    );
+  return [...new Set(rows.map((r) => r.threadId))];
 };
 
 export const countIndexedThreads = async (connectionId: string): Promise<number> => {

@@ -27,6 +27,8 @@ import {
   getFolderValidities,
   deleteLedgerRows,
   insertLedgerRowsIfAbsent,
+  findOrphanSnoozeThreadIds,
+  findOrphanNoteThreadIds,
   type IndexLabel,
 } from './mail-index';
 import { generateWhatUserCaresAbout, type UserTopic } from './analyze/interests';
@@ -1381,19 +1383,93 @@ export class MailEngine {
     // Threads that did NOT come back get their wake rows pruned LOUDLY:
     // a wake row without a thread is the orphan the unsnooze sweep would
     // otherwise act on blindly.
-    const lostSnoozes: string[] = [];
+    const unrecovered: string[] = [];
     for (const threadId of snoozedIds) {
       const recovered = (await getThreadLabels(this.connectionId, threadId)).length > 0;
       if (recovered) {
         await this.applyIndexLabelsFromSync(threadId, ['SNOOZED'], []);
       } else {
-        lostSnoozes.push(threadId);
+        unrecovered.push(threadId);
+      }
+    }
+    // POSITIVE-evidence gate before the prune (destructive-prune ruling).
+    // "Not re-indexed by the passes above" is NOT proof of absence: each
+    // pass lists a bounded window (maxSyncCount newest threads), so an
+    // archive holding more than the window structurally omits older
+    // snoozed messages on ANY server — and on GreenMail the listing can
+    // additionally be stale (mailbox.exists reads low right after moves).
+    // Ambiguity means KEEP: an orphaned wake row that later fires into
+    // nothing is a recoverable nuisance; a pruned live reminder is silent
+    // destruction. getThreadFolders is the positive instrument — a
+    // server-side member SEARCH per folder kind, independent of listing
+    // windows and exists counts, and it THROWS rather than returning
+    // empty on failure, so [] after success genuinely means "searched
+    // INBOX/ARCHIVE/SPAM/TRASH, found nowhere".
+    const lostSnoozes: string[] = [];
+    if (unrecovered.length) {
+      let searched: Record<string, string[]> | null = null;
+      try {
+        searched = this.driver.getThreadFolders
+          ? await this.driver.getThreadFolders(unrecovered)
+          : null;
+      } catch (error) {
+        searched = null;
+        console.error(
+          `[MailEngine:${this.connectionId}] forceReSync: member search failed for ${unrecovered.length} unrecovered snooze(s) (${(error as Error).message}) — keeping all wake rows on ambiguous evidence`,
+        );
+      }
+      for (const threadId of unrecovered) {
+        const folders = searched?.[threadId];
+        if (folders === undefined) {
+          // No instrument or search failure: ambiguous — keep, loudly.
+          console.error(
+            `[MailEngine:${this.connectionId}] forceReSync: snooze ${threadId} not re-indexed and absence UNPROVEN — wake row kept; next sync converges`,
+          );
+        } else if (folders.length === 0) {
+          lostSnoozes.push(threadId); // searched everywhere, positively gone
+        } else {
+          // The message EXISTS (the rebuild listing just missed it):
+          // rescue — index the thread and restore its snoozed state.
+          const synced = await this.syncThread({ threadId });
+          if (synced.success) {
+            await this.applyIndexLabelsFromSync(threadId, ['SNOOZED'], []);
+            console.warn(
+              `[MailEngine:${this.connectionId}] forceReSync: snooze ${threadId} missed by the ${folders.join('/')} listing window — rescued by member search`,
+            );
+          } else {
+            console.error(
+              `[MailEngine:${this.connectionId}] forceReSync: snooze ${threadId} exists on the server (${folders.join('/')}) but index catch-up failed (${synced.reason}); wake row kept, next sync converges`,
+            );
+          }
+        }
       }
     }
     if (lostSnoozes.length) {
       await snoozeStore.delete(this.connectionId, lostSnoozes);
       console.error(
-        `[MailEngine:${this.connectionId}] forceReSync: ${lostSnoozes.length} snoozed thread(s) not recoverable from the server; pruned their wake rows (ids: ${lostSnoozes.join(', ')})`,
+        `[MailEngine:${this.connectionId}] forceReSync: ${lostSnoozes.length} snoozed thread(s) POSITIVELY absent from the server (member search); pruned their wake rows (ids: ${lostSnoozes.join(', ')})`,
+      );
+    }
+    // Orphan inventory (detect + surface ONLY — nothing is auto-deleted):
+    // wake rows and notes keyed by thread ids the index no longer resolves.
+    // This is the moment orphans would be minted, so report here, loudly.
+    try {
+      const orphanWakes = await findOrphanSnoozeThreadIds(this.connectionId);
+      if (orphanWakes.length) {
+        console.error(
+          `[MailEngine:${this.connectionId}] forceReSync: ${orphanWakes.length} wake row(s) reference threads missing from the index (kept, NOT deleted): ${orphanWakes.join(', ')}`,
+        );
+      }
+      const orphanNotes = await findOrphanNoteThreadIds(this.connection.userId);
+      if (orphanNotes.length) {
+        console.error(
+          `[MailEngine:${this.connectionId}] forceReSync: ${orphanNotes.length} note(s) reference threads missing from every connection index of user ${this.connection.userId} (kept, NOT deleted): ${orphanNotes.join(', ')}`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        `[MailEngine:${this.connectionId}] forceReSync: orphan inventory failed:`,
+        (error as Error).message,
       );
     }
     // Record the cursor this resync was built against (Phase 6.3). Leaving

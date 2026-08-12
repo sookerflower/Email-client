@@ -1580,14 +1580,30 @@ export class MailEngine {
     const { query, folder = 'inbox', maxResults = 50, labelIds = [], pageToken } = params;
     try {
       const r = await this.driver.list({ folder, query, labelIds, maxResults, pageToken });
+      // "0 matches" and "empty folder" must not be byte-identical: report the
+      // folder's real message count next to the match count so a caller (the
+      // chat model, above all) can tell a miss from an empty mailbox. STATUS
+      // is one cheap command on the cached connection; null on failure means
+      // "unknown", never a fake zero.
+      const folderTotal = await Promise.resolve(this.driver.getFolderState?.(folder))
+        .then((s) => (s as { messages?: number | null } | null | undefined)?.messages ?? null)
+        .catch(() => null);
       return {
         threadIds: r.threads.map((t) => t.id),
+        matchCount: r.threads.length,
+        folderTotal,
         source: 'raw' as const,
         nextPageToken: pageToken,
       };
     } catch (error) {
       console.error('[MailEngine] searchThreads failed:', error);
-      return { threadIds: [], source: 'raw' as const, nextPageToken: pageToken };
+      return {
+        threadIds: [],
+        matchCount: 0,
+        folderTotal: null,
+        source: 'raw' as const,
+        nextPageToken: pageToken,
+      };
     }
   }
 

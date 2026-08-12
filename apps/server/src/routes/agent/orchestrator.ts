@@ -1,7 +1,6 @@
 import { streamText, tool, type DataStreamWriter, type ToolSet } from 'ai';
 import { perplexity } from '@ai-sdk/perplexity';
 
-import { getZeroAgent } from '../../lib/server-utils';
 import { Tools } from '../../types';
 import { z } from 'zod';
 
@@ -11,7 +10,7 @@ import { z } from 'zod';
  */
 export class ToolOrchestrator {
   private dataStream: DataStreamWriter;
-  private streamingTools: Set<string> = new Set([Tools.WebSearch, Tools.InboxRag]);
+  private streamingTools: Set<string> = new Set([Tools.WebSearch]);
   private connectionId: string;
 
   constructor(dataStream: DataStreamWriter, connectionId: string) {
@@ -67,23 +66,12 @@ export class ToolOrchestrator {
       });
     }
 
-    if (toolName === Tools.InboxRag) {
-      return tool({
-        description:
-          'Search the inbox for emails using natural language. Returns only an array of threadIds.',
-        parameters: z.object({
-          query: z.string().describe('The query to search the inbox for'),
-          folder: z.string().describe('The folder to search the inbox for').default('inbox'),
-          maxResults: z.number().describe('The maximum number of results to return').default(10),
-        }),
-        execute: async ({ query, folder, maxResults }) => {
-          const { stub: agent } = await getZeroAgent(this.connectionId);
-          const res = await agent.searchThreads({ query, maxResults, folder });
-          return res.threadIds;
-        },
-      });
-    }
-
+    // InboxRag is deliberately NOT overridden here any more. The override was
+    // an unlogged byte-for-byte duplicate of the tools.ts version, which made
+    // every chat search invisible in the logs — diagnosing "chat says the
+    // inbox is empty" took a database dig that one console.log would have
+    // spared. The tools.ts version (with logging and the informative
+    // match/folder counts) is the single implementation now.
     return originalTool;
   }
 

@@ -417,7 +417,10 @@ export const tools = async (connectionId: string) => {
     [Tools.WebSearch]: webSearch(),
     [Tools.InboxRag]: tool({
       description:
-        'Search the inbox for emails using natural language. Returns only an array of threadIds.',
+        'Search a folder with literal search terms (words are ANDed; operators like ' +
+        'from:/subject:/is:unread supported). Returns matching threadIds plus matchCount ' +
+        'and folderTotal — 0 matches with a non-zero folderTotal means the TERMS missed, ' +
+        'NOT that the folder is empty. To list a folder without filtering, use listEmails.',
       parameters: z.object({
         query: z.string().describe('The query to search the inbox for'),
         maxResults: z.number().describe('The maximum number of results to return').default(10),
@@ -427,8 +430,22 @@ export const tools = async (connectionId: string) => {
         console.log('[InboxRag] searching threads', { query, maxResults, folder });
         const { stub: agent } = await getZeroAgent(connectionId);
         const res = await agent.searchThreads({ query, maxResults, folder });
-        console.log('[InboxRag] returned threadIds', res.threadIds);
-        return res.threadIds;
+        console.log('[InboxRag] matched', res.matchCount, 'of', res.folderTotal, 'in', folder);
+        const summary =
+          res.matchCount === 0
+            ? `0 matches for "${query}" in ${folder}; the folder contains ` +
+              `${res.folderTotal ?? 'an unknown number of'} message(s). ` +
+              (res.folderTotal
+                ? 'The folder is NOT empty — the search terms matched nothing.'
+                : '')
+            : `${res.matchCount} match(es) for "${query}" in ${folder} ` +
+              `(folder holds ${res.folderTotal ?? 'unknown'} message(s)).`;
+        return {
+          threadIds: res.threadIds,
+          matchCount: res.matchCount,
+          folderTotal: res.folderTotal,
+          summary,
+        };
       },
     }),
   };

@@ -471,7 +471,7 @@ export const AiChatPrompt = () =>
 
         <tool name="${Tools.GetThread}">
           <purpose>Get thread details for a specific ID and show a threadPreview component for the user</purpose>
-          <returns>Thread tag for client resolution</returns>
+          <returns>{ id, subject, sender, date, messageCount, hasUnread, labels, participants, latestSnippet }</returns>
           <example>getThread({ id: "17c2318b9c1e44f6" })</example>
         </tool>
 

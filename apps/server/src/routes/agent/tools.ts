@@ -19,22 +19,51 @@ const _models: Record<ModelTypes, any> = {
 };
 
 /**
- * ⚠️  IMPORTANT
- * Do NOT return the full thread here – it bloats the conversation state and
- * may hit the 128 MB cap in Cloudflare Workers. We only hand back a lightweight
- * tag that the front-end can interpret.
- *
- * The tag format must be exactly: <thread id="{id}"/>
+ * Returns the thread's REAL fields, compactly. This used to return only a
+ * `<thread id="…"/>` placeholder (a Cloudflare-era guard against bloating
+ * worker state), which left the model — and the chat surface — with a bare
+ * base64 id where the sender should be and "[Not Provided]" subjects. The
+ * bloat concern is still honored by staying lightweight: per-message
+ * envelope fields plus a truncated snippet of the latest body, never full
+ * bodies for the whole thread.
  */
-const getEmail = () =>
+const getEmail = (connectionId: string) =>
   tool({
-    description: 'Return a placeholder tag for a specific email thread by ID',
+    description:
+      'Get a specific email thread by ID: subject, sender, recipients, date, labels, ' +
+      'message count, and a snippet of the latest message body.',
     parameters: z.object({
       id: z.string().describe('The ID of the email thread to retrieve'),
     }),
     execute: async ({ id }) => {
-      /* nothing to fetch server-side any more */
-      return `<thread id="${id}"/>`;
+      console.log('[GetThread] fetching', id);
+      let thread: IGetThreadResponse;
+      try {
+        const { result } = await getThread(connectionId, id);
+        thread = result;
+      } catch (error) {
+        console.error('[GetThread] failed for', id, error);
+        return { id, error: 'Thread not found' };
+      }
+      const latest = thread.latest ?? thread.messages[thread.messages.length - 1];
+      const snippet = (latest?.decodedBody ?? '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 400);
+      return {
+        id,
+        subject: latest?.subject ?? null,
+        sender: latest?.sender ?? null,
+        date: latest?.receivedOn ?? null,
+        messageCount: thread.messages.length,
+        hasUnread: thread.hasUnread,
+        labels: thread.labels?.map((l) => l.name) ?? [],
+        participants: thread.messages
+          .map((m) => m.sender?.email)
+          .filter((v, i, a) => v && a.indexOf(v) === i),
+        latestSnippet: snippet || null,
+      };
     },
   });
 
@@ -399,7 +428,7 @@ export const webSearch = () =>
 
 export const tools = async (connectionId: string) => {
   return {
-    [Tools.GetThread]: getEmail(),
+    [Tools.GetThread]: getEmail(connectionId),
     [Tools.GetThreadSummary]: getThreadSummary(connectionId),
     [Tools.ComposeEmail]: composeEmailTool(connectionId),
     [Tools.MarkThreadsRead]: markAsRead(connectionId),

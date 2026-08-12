@@ -104,23 +104,28 @@ const composeEmailTool = (connectionId: string) =>
     },
   });
 
-// const listEmails = (connectionId: string) =>
-//   tool({
-//     description: 'List emails in a specific folder',
-//     parameters: z.object({
-//       folder: z.string().describe('The folder to list emails from').default('inbox'),
-//       maxResults: z
-//         .number()
-//         .optional()
-//         .describe('The maximum number of results to return')
-//         .default(5),
-//       labelIds: z.array(z.string()).optional().describe('The labels to filter emails'),
-//       pageToken: z.string().optional().describe('The page token to continue listing emails'),
-//     }),
-//     execute: async (params) => {
-//       return await agent.list(params);
-//     },
-//   });
+const listEmails = (connectionId: string) =>
+  tool({
+    description:
+      'List the newest threads in a mail folder — sender address, subject and date per ' +
+      'thread, no search query. Use this for "show/list my inbox"-shaped questions ' +
+      '(who emailed me, what is in my inbox/sent/archive). Folders: inbox, sent, ' +
+      'drafts, archive, spam, bin, snoozed.',
+    parameters: z.object({
+      folder: z.string().describe("The folder to list (default 'inbox')").default('inbox'),
+      maxResults: z
+        .number()
+        .describe('How many threads to return, 1-50 (default 20)')
+        .default(20),
+    }),
+    execute: async ({ folder, maxResults }) => {
+      console.log('[ListEmails] listing', { folder, maxResults });
+      const { stub: agent } = await getZeroAgent(connectionId);
+      const result = await agent.listFolderSummaries({ folder, maxResults });
+      console.log('[ListEmails] returned', result.count, 'thread(s) from', result.folder);
+      return result;
+    },
+  });
 
 const markAsRead = (connectionId: string) =>
   tool({
@@ -408,6 +413,7 @@ export const tools = async (connectionId: string) => {
     [Tools.DeleteLabel]: deleteLabel(connectionId),
     [Tools.BuildGmailSearchQuery]: buildGmailSearchQuery(),
     [Tools.GetCurrentDate]: getCurrentDate(),
+    [Tools.ListEmails]: listEmails(connectionId),
     [Tools.WebSearch]: webSearch(),
     [Tools.InboxRag]: tool({
       description:

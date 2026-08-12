@@ -244,6 +244,7 @@ export enum Tools {
   AskZeroThread = 'askZeroThread',
   WebSearch = 'webSearch',
   InboxRag = 'inboxRag',
+  ListEmails = 'listEmails',
   BuildGmailSearchQuery = 'buildGmailSearchQuery',
   GetCurrentDate = 'getCurrentDate',
 }

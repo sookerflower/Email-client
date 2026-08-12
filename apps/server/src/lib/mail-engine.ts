@@ -1592,6 +1592,33 @@ export class MailEngine {
   }
 
   /**
+   * Plain folder listing for the chat's listEmails tool: newest threads with
+   * sender/subject/date, no search query. Same driver.list path the UI-facing
+   * probes use — a query-less list of a folder that holds mail always returns
+   * threads, unlike a literal-text search that happens to match nothing.
+   */
+  async listFolderSummaries(params: { folder?: string; maxResults?: number }) {
+    const { folder = 'inbox', maxResults = 20 } = params;
+    const capped = Math.min(Math.max(1, Math.floor(maxResults)), 50);
+    const r = await this.driver.list({ folder, query: '', labelIds: [], maxResults: capped });
+    return {
+      folder,
+      count: r.threads.length,
+      threads: r.threads.map((t) => {
+        const raw = (t as { $raw?: Record<string, unknown> }).$raw ?? {};
+        return {
+          threadId: t.id,
+          sender: (raw.from as string | undefined) ?? null,
+          subject: (raw.subject as string | undefined) ?? null,
+          date: (raw.date as string | undefined) ?? null,
+          unread: (raw.unread as boolean | undefined) ?? null,
+          messageCount: (raw.messageCount as number | undefined) ?? null,
+        };
+      }),
+    };
+  }
+
+  /**
    * AI topic suggestions, cached in Redis (Phase 3.4: replaces the DO
    * ctx.storage cache). Generation is guarded by SET NX so two processes
    * don't regenerate at once; a lost lock just means this caller returns []

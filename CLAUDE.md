@@ -71,8 +71,9 @@ with the incidents and verification numbers. Read it before doing anything.
   → 6.3 connection-discipline audit → 6.4 workerd deletion + repo hygiene →
   6.5 fresh-mailbox resync drill — **ALL DONE. PHASE 6 IS CLOSED; the
   migration is complete.** What remains is deployment/ops (real TLS cert on
-  the mail server, ws.re.cx SSE buffering, model choice for chat) and the
-  paused rebrand — product decisions, not migration work.
+  the mail server, ws.re.cx SSE buffering, model choice for chat) — product
+  decisions, not migration work. The Zero→AxMail rebrand SHIPPED (assets,
+  metadata, user-facing strings; commits 7edc0d84/42091534 era).
   - **6.1 (closed)**: `MailManager.getFolderState` (optional; IMAP driver +
     proxy implement it) + `syncFolderJob` compares server `uidValidity` to
     `folder_sync_state` before every sync. On change: purge folder-labeled

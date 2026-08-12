@@ -28,6 +28,8 @@ export const createDraftData = z.object({
   bcc: z.string().optional(),
   subject: z.string(),
   message: z.string(),
+  // See IOutgoingMessage.bodyType — absent means 'html' (legacy behavior).
+  bodyType: z.enum(['html', 'text']).optional(),
   attachments: z.array(serializedFileSchema).optional(),
   id: z.string().nullable(),
   threadId: z.string().nullable(),

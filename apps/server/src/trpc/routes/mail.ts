@@ -358,6 +358,9 @@ export const mailRouter = router({
         to: z.array(senderSchema),
         subject: z.string(),
         message: z.string(),
+        // See IOutgoingMessage.bodyType — absent means 'html'. Flows into
+        // `mail` (and outbox payloads) via the spread below.
+        bodyType: z.enum(['html', 'text']).optional(),
         attachments: z.array(serializedFileSchema).optional().default([]),
         headers: z.record(z.string()).optional().default({}),
         cc: z.array(senderSchema).optional(),

@@ -545,6 +545,7 @@ export function EmailComposer({
         bcc: values.bcc?.join(', '),
         subject: values.subject,
         message: editor.getHTML(),
+        bodyType: 'html' as const,
         attachments: await serializeFiles(values.attachments ?? []),
         id: draftId,
         threadId: threadId ? threadId : null,

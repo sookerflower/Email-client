@@ -186,6 +186,7 @@ export default function ReplyCompose({ messageId }: ReplyComposeProps) {
         bcc: bccRecipients,
         subject: data.subject,
         message: emailBody,
+        bodyType: 'html',
         attachments: await serializeFiles(data.attachments),
         fromEmail: fromEmail,
         draftId: draftId ?? undefined,

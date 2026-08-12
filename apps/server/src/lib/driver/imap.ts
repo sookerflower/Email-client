@@ -17,6 +17,7 @@ import type {
 import type { IOutgoingMessage, Label, ParsedMessage, DeleteAllSpamResponse } from '../../types';
 import { simpleParser, type AddressObject, type ParsedMail } from 'mailparser';
 import type { CreateDraftData } from '../schemas';
+import { messageBodyParts } from '../plain-text-html';
 import { StandardizedError } from './standardized-error';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
@@ -1254,7 +1255,9 @@ export class ImapSmtpMailManager implements MailManager {
       cc: data.cc?.length ? formatRecipients(data.cc) : undefined,
       bcc: data.bcc?.length ? formatRecipients(data.bcc) : undefined,
       subject: data.subject,
-      html: data.message,
+      // 'text' bodies (chat-agent prose) become multipart: original plain
+      // text + escaped/derived HTML. 'html'/absent stays html-only, verbatim.
+      ...messageBodyParts(data.message, data.bodyType),
       // Threading headers: declared-but-dropped in AxMail's sender; passed
       // through here so replies thread correctly on the receiving end.
       inReplyTo,
@@ -1337,7 +1340,7 @@ export class ImapSmtpMailManager implements MailManager {
           cc: splitList(data.cc),
           bcc: splitList(data.bcc),
           subject: data.subject,
-          html: data.message,
+          ...messageBodyParts(data.message, data.bodyType),
           attachments: data.attachments?.map((a) => ({
             filename: a.name,
             // eslint-disable-next-line @typescript-eslint/no-explicit-any

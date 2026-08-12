@@ -221,12 +221,16 @@ const sendEmail = (connectionId: string) =>
         if (draftId) {
           await agent.sendDraft(draftId, {
             ...mail,
+            // The model's body is prose with \n breaks — never HTML. The
+            // driver converts it (escaped) and sends multipart.
+            bodyType: 'text',
             attachments: [],
             headers: {},
           });
         } else {
           await agent.create({
             ...mail,
+            bodyType: 'text',
             attachments: [],
             headers: {},
           });

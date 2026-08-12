@@ -197,6 +197,15 @@ export interface IOutgoingMessage {
   bcc?: Sender[];
   subject: string;
   message: string;
+  /**
+   * What `message` contains. 'html' = ready-to-send markup (the composer's
+   * rich-text output); 'text' = plain prose whose line breaks are meaningful
+   * (the chat agent's tool) — converted to escaped HTML + a text/plain part
+   * at the driver boundary. Absent = 'html' (legacy callers and previously
+   * stored outbox payloads). Explicit flag by ruling: tag-sniffing the body
+   * fails silently on prose containing a literal `<`.
+   */
+  bodyType?: 'html' | 'text';
   attachments: {
     name: string;
     type: string;

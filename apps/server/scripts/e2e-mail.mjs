@@ -139,6 +139,8 @@ const FIXTURE_PREFIXES = [
   // list they leaked past every sweep — runId-scoped and past-dated, so
   // harmless to the oracle, but they accumulated silently in GreenMail.
   'eqv',
+  // Plain-text body legs (ptx chat / ptx draft).
+  'ptx',
 ];
 
 const legs = [];
@@ -378,6 +380,206 @@ await leg('get', async () => {
     await new Promise((r) => setTimeout(r, 3000));
   }
 });
+
+// --------------------------------------------------------------------------
+// Plain-text body legs: the chat agent's sendEmail tool passes prose with \n
+// line breaks and bodyType:'text'. The driver must deliver MULTIPART mail —
+// the original prose as text/plain, escaped derived HTML as text/html — so
+// paragraph breaks survive and literal < / & arrive as characters. Before the
+// fix the prose went verbatim into the html: slot (single text/html part,
+// breaks collapse at render); these legs fail against that code.
+//
+// `always: true`: the three proofs are independent of each other and of the
+// suite's earlier fixtures (own /rpc + direct IMAP reads), and the red run
+// must capture ALL THREE failures, not stop at the first.
+
+const ptxSubject = `ptx chat ${runId}`;
+const ptxDraftSubject = `ptx draft ${runId}`;
+const PTX_BODY =
+  'Hi there,\n\nParagraph two: if x < 5 & y > 2 then a <b> tag is text.\n\nBest regards,\nRabi';
+
+const ptxRpc = async (method, args) => {
+  const auth = {
+    userId: 'e2e-ptx',
+    accessToken: '',
+    refreshToken: '',
+    email: mode.email,
+    imap: REAL
+      ? {
+          imapHost: devVars.IMAP_DEFAULT_IMAP_HOST,
+          imapPort: Number(devVars.IMAP_DEFAULT_IMAP_PORT || 993),
+          imapSecure: true,
+          smtpHost: devVars.IMAP_DEFAULT_SMTP_HOST,
+          smtpPort: Number(devVars.IMAP_DEFAULT_SMTP_PORT || 587),
+          smtpSecure: false,
+          username: devVars.TEST_IMAP_USER,
+          password: devVars.TEST_IMAP_PASSWORD,
+          allowInsecureTls: true,
+        }
+      : {
+          imapHost: '127.0.0.1',
+          imapPort: 3143,
+          imapSecure: false,
+          smtpHost: '127.0.0.1',
+          smtpPort: 3025,
+          smtpSecure: false,
+          username: mode.email,
+          password: mode.password,
+        },
+  };
+  const res = await fetch(`${SIDECAR}/rpc`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-imap-sidecar-secret': devVars.IMAP_SIDECAR_SECRET,
+    },
+    body: JSON.stringify({ method, args, auth }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(`${method}: ${body.error}`);
+  return body.result;
+};
+
+/** Raw RFC822 source of the newest message matching `subject`, or null. */
+const ptxFetchSource = async (folderQuery, subject, timeoutMs) => {
+  const { ImapFlow } = await import('imapflow');
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const client = new ImapFlow(
+      REAL
+        ? {
+            host: devVars.IMAP_DEFAULT_IMAP_HOST,
+            port: Number(devVars.IMAP_DEFAULT_IMAP_PORT || 993),
+            secure: true,
+            auth: { user: devVars.TEST_IMAP_USER, pass: devVars.TEST_IMAP_PASSWORD },
+            tls: { rejectUnauthorized: false },
+            logger: false,
+          }
+        : {
+            host: '127.0.0.1',
+            port: 3143,
+            secure: false,
+            auth: { user: mode.email, pass: mode.password },
+            logger: false,
+          },
+    );
+    client.on('error', () => {});
+    await client.connect();
+    try {
+      const boxes = await client.list();
+      const box =
+        folderQuery === 'INBOX'
+          ? 'INBOX'
+          : (boxes.find((b) => b.specialUse === '\\Drafts') ??
+              boxes.find((b) => /drafts/i.test(b.path)))?.path;
+      if (box) {
+        const lock = await client.getMailboxLock(box);
+        try {
+          const uids = (await client.search({ header: { subject } }, { uid: true })) || [];
+          if (uids.length) {
+            const msg = await client.fetchOne(String(uids[uids.length - 1]), { source: true }, { uid: true });
+            if (msg?.source) return msg.source.toString('utf-8');
+          }
+        } finally {
+          lock.release();
+        }
+      }
+    } finally {
+      await client.logout().catch(() => {});
+    }
+    if (Date.now() > deadline) return null;
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+};
+
+const ptxRootContentType = (raw) => {
+  const headerBlock = raw.split(/\r?\n\r?\n/)[0] ?? '';
+  const m = headerBlock.match(/^content-type:\s*([^;\r\n]+)/im);
+  return (m?.[1] ?? '').trim().toLowerCase();
+};
+
+let ptxDeliveredRaw = null; // shared: fetched once by the first leg below
+
+await leg('plaintext-send-breaks', async () => {
+  await ptxRpc('create', [
+    {
+      // Exactly the chat tool's payload shape (routes/agent/tools.ts sendEmail).
+      to: [{ email: mode.email, name: 'PTX' }],
+      subject: ptxSubject,
+      message: PTX_BODY,
+      bodyType: 'text',
+      attachments: [],
+      headers: {},
+    },
+  ]);
+  ptxDeliveredRaw = await ptxFetchSource('INBOX', ptxSubject, REAL ? 120_000 : 30_000);
+  if (!ptxDeliveredRaw) throw new Error(`delivered message "${ptxSubject}" not found in INBOX`);
+
+  const rootType = ptxRootContentType(ptxDeliveredRaw);
+  if (rootType !== 'multipart/alternative')
+    throw new Error(`delivered as ${rootType || 'unknown'}, not multipart/alternative`);
+
+  const { simpleParser } = await import('mailparser');
+  const parsed = await simpleParser(ptxDeliveredRaw);
+  const text = (parsed.text ?? '').replace(/\r\n/g, '\n');
+  if (!text.includes('Hi there,\n\nParagraph two'))
+    throw new Error('text/plain part lost the paragraph break');
+  if (!text.includes('Best regards,\nRabi'))
+    throw new Error('text/plain part lost the sign-off line break');
+  const html = parsed.html || '';
+  if (!html.includes('<p>Hi there,</p>'))
+    throw new Error('html part is not paragraph-wrapped');
+  if (!html.includes('Best regards,<br>Rabi'))
+    throw new Error('html part lost the sign-off line break');
+  return 'multipart/alternative; breaks intact in both parts';
+}, { always: true });
+
+await leg('plaintext-send-escaping', async () => {
+  if (!ptxDeliveredRaw) throw new Error('no delivered message captured by plaintext-send-breaks');
+  const { simpleParser } = await import('mailparser');
+  const parsed = await simpleParser(ptxDeliveredRaw);
+  const text = (parsed.text ?? '').replace(/\r\n/g, '\n');
+  if (!text.includes('if x < 5 & y > 2 then a <b> tag is text'))
+    throw new Error('text/plain part does not carry the literal characters');
+  const html = parsed.html || '';
+  if (!html.includes('if x &lt; 5 &amp; y &gt; 2'))
+    throw new Error('html part did not escape < & >');
+  if (!html.includes('a &lt;b&gt; tag'))
+    throw new Error('html part carries a raw <b> — body text became markup');
+  return '< & > literal in text part, escaped in html part';
+}, { always: true });
+
+await leg('plaintext-draft-breaks', async () => {
+  const created = await ptxRpc('createDraft', [
+    {
+      to: mode.email,
+      subject: ptxDraftSubject,
+      message: PTX_BODY,
+      bodyType: 'text',
+      attachments: [],
+      id: null,
+      threadId: null,
+      fromEmail: null,
+    },
+  ]);
+  if (!created?.id) throw new Error(`createDraft returned ${JSON.stringify(created)}`);
+  const raw = await ptxFetchSource('drafts', ptxDraftSubject, REAL ? 60_000 : 20_000);
+  if (!raw) throw new Error(`draft "${ptxDraftSubject}" not found in Drafts`);
+  const rootType = ptxRootContentType(raw);
+  if (rootType !== 'multipart/alternative')
+    throw new Error(`draft stored as ${rootType || 'unknown'}, not multipart/alternative`);
+  const { simpleParser } = await import('mailparser');
+  const parsed = await simpleParser(raw);
+  const text = (parsed.text ?? '').replace(/\r\n/g, '\n');
+  if (!text.includes('Hi there,\n\nParagraph two'))
+    throw new Error('draft text part lost the paragraph break');
+  if (!(parsed.html || '').includes('<p>Hi there,</p>'))
+    throw new Error('draft html part is not paragraph-wrapped');
+  // Cleanup: drafts live outside INBOX, so the drop-recover GreenMail wipe is
+  // the only other thing that would remove it; delete deterministically here.
+  await ptxRpc('deleteDraft', [created.id]).catch(() => {});
+  return 'draft multipart with breaks intact';
+}, { always: true });
 
 await leg('scheduled-send', async () => {
   // Outbox-backed delayed send (Phase 4 §4): schedule a self-addressed mail

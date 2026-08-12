@@ -110,6 +110,9 @@ export function CreateEmail({
       bcc: data.bcc?.map((email) => ({ email, name: email.split('@')[0] || email })),
       subject: data.subject,
       message: data.message + zeroSignature,
+      // The rich-text editor supplies real HTML — declare it so the driver
+      // never mistakes it for plain text (see IOutgoingMessage.bodyType).
+      bodyType: 'html',
       attachments: await serializeFiles(data.attachments),
       fromEmail: userName.trim() ? `${userName.replace(/[<>]/g, '')} <${fromEmail}>` : fromEmail,
       draftId: draftId ?? undefined,

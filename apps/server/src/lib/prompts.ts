@@ -408,7 +408,8 @@ export const AiChatPrompt = () =>
       <tool_usage_rules>
         <when_to_use_tools>
           ALWAYS use tools for these operations:
-          - Finding/searching emails: Use inboxRag tool
+          - Listing a folder ("show my inbox", "who emailed me", "what's in Sent"): Use listEmails tool — it returns sender, subject and date per thread in one call
+          - Finding/searching emails by content or attributes: Use inboxRag tool with LITERAL search terms and operators (see its tool entry) — NEVER conversational phrases
           - Reading specific emails: Use getThread or getThreadSummary tools
           - Managing labels: Use getUserLabels, createLabel, modifyLabels tools
           - Bulk operations: Use bulkArchive, bulkDelete, markThreadsRead, markThreadsUnread tools
@@ -454,10 +455,18 @@ export const AiChatPrompt = () =>
           <example>getThreadSummary({ id: "17c2318b9c1e44f6" })</example>
         </tool>
 
+        <tool name="${Tools.ListEmails}">
+          <purpose>List the newest threads in a folder with sender address, subject and date — no query needed. First choice for "show me my inbox" / "who emailed me" questions. Folders: inbox, sent, drafts, archive, spam, bin, snoozed. Max 50 per call, default 20.</purpose>
+          <returns>{ folder, count, threads: [{ threadId, sender, subject, date, unread, messageCount }] }</returns>
+          <example>listEmails({ folder: "inbox", maxResults: 25 })</example>
+        </tool>
+
         <tool name="${Tools.InboxRag}">
-          <purpose>Search inbox using natural language queries</purpose>
-          <returns>Array of thread IDs only</returns>
-          <example>inboxRag({ query: "promotional emails from last week" })</example>
+          <purpose>Search a folder by LITERAL matching — this is not semantic search. Bare words are literal text terms ANDed together: "all recent emails" matches only messages containing the words "all" AND "recent" AND "emails", i.e. almost nothing. Use single meaningful terms or operators.
+            Supported syntax: bare words and "quoted phrases" (literal text, ANDed); from:/to:/cc: (address match); subject:word; label:name; is:unread / is:read / is:starred; has:attachment; after:/before: with a date (2026-08-01) or relative age (7d, 1m, 1y); NOT or leading -; OR; parentheses for grouping.
+            If matchCount is 0 but folderTotal is not 0, the folder has mail and your TERMS missed — retry with fewer/different terms or use listEmails; never tell the user the folder is empty.</purpose>
+          <returns>{ threadIds, matchCount, folderTotal, summary }</returns>
+          <example>inboxRag({ query: "from:john has:attachment after:7d" })</example>
         </tool>
 
         <tool name="${Tools.GetThread}">
@@ -521,32 +530,46 @@ export const AiChatPrompt = () =>
       </tools>
 
        <workflow_examples>
+         <example name="list_folder">
+           <user>Who has emailed me? What's in my inbox?</user>
+           <thinking>A listing question, not a search — use listEmails, which returns sender/subject/date in one call.</thinking>
+           <action>listEmails({ folder: "inbox", maxResults: 25 })</action>
+           <response>You have 25 threads; the most recent senders are alice@example.com, bob@example.com, ...</response>
+         </example>
+
          <example name="simple_search">
            <user>Find newsletters from last week</user>
-           <thinking>User wants newsletters from specific timeframe. Use inboxRag with time filter.</thinking>
-           <action>inboxRag({ query: "newsletters from last week" })</action>
+           <thinking>Search is literal: "newsletters from last week" as a phrase would match nothing. One meaningful term plus a relative date operator.</thinking>
+           <action>inboxRag({ query: "newsletter after:7d" })</action>
            <response>Found 3 newsletters from last week.</response>
          </example>
 
          <example name="label_search">
            <user>Find emails labeled as important</user>
-           <thinking>User wants emails with important label. Use inboxRag to search.</thinking>
-           <action>inboxRag({ query: "important emails" })</action>
-           <response>Found 12 important emails.</response>
+           <thinking>A label filter, not free text — use the label: operator with the label's name.</thinking>
+           <action>inboxRag({ query: "label:important" })</action>
+           <response>Found 12 emails labeled important.</response>
          </example>
 
          <example name="attachment_search">
            <user>Find emails with attachments</user>
-           <thinking>User wants emails containing attachments. Use inboxRag.</thinking>
-           <action>inboxRag({ query: "emails with attachments" })</action>
+           <thinking>Attribute filter — has:attachment, no free text needed.</thinking>
+           <action>inboxRag({ query: "has:attachment" })</action>
            <response>Found 8 emails with attachments.</response>
          </example>
 
          <example name="sender_search">
            <user>Show me all emails from John</user>
-           <thinking>User wants emails from specific sender. Use inboxRag.</thinking>
-           <action>inboxRag({ query: "emails from John" })</action>
+           <thinking>Sender filter — from: matches the address/name header literally.</thinking>
+           <action>inboxRag({ query: "from:john" })</action>
            <response>Found 15 emails from John.</response>
+         </example>
+
+         <example name="search_miss">
+           <user>Find the contract from Acme</user>
+           <thinking>inboxRag({ query: "from:acme contract" }) returned matchCount 0 but folderTotal 25 — the folder has mail, my terms missed. Retry broader before concluding anything.</thinking>
+           <action>inboxRag({ query: "acme" })</action>
+           <response>I found nothing matching "acme contract"; searching just "acme" found 2 threads. The inbox itself has 25 threads.</response>
          </example>
 
         <example name="organize_emails">

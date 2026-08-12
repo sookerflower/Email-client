@@ -218,9 +218,12 @@ export function NavMain({ items }: NavMainProps) {
             <SidebarMenuItem className="mb-4" style={{ height: 'auto' }}>
               <div className="mx-2 mb-4 flex items-center justify-between">
                 <span className="text-muted-foreground text-[13px] dark:text-[#898989]">
-                  {activeAccount?.providerId === 'google' ? 'Labels' : 'Folders'}
+                  {/* IMAP reads "Labels" like Google: the app only creates
+                      $zl_ keyword labels, never real IMAP folders, so a
+                      "Folders" heading over this list is misleading. */}
+                  {activeAccount?.providerId === 'microsoft' ? 'Folders' : 'Labels'}
                 </span>
-                {activeAccount?.providerId === 'google' ? (
+                {activeAccount?.providerId === 'microsoft' ? null : (
                   <LabelDialog
                     trigger={
                       <Button
@@ -233,10 +236,21 @@ export function NavMain({ items }: NavMainProps) {
                     }
                     onSubmit={onSubmit}
                   />
-                ) : activeAccount?.providerId === 'microsoft' ? null : null}
+                )}
               </div>
 
-              {activeAccount ? <SidebarLabels data={userLabels ?? []} /> : null}
+              {activeAccount ? (
+                <>
+                  <SidebarLabels data={userLabels ?? []} />
+                  {activeAccount.providerId !== 'microsoft' &&
+                  userLabels &&
+                  userLabels.length === 0 ? (
+                    <p className="text-muted-foreground mx-2 mt-1 text-xs dark:text-[#898989]">
+                      Labels tag and filter your mail — press + to create one.
+                    </p>
+                  ) : null}
+                </>
+              ) : null}
             </SidebarMenuItem>
           </Collapsible>
         )}

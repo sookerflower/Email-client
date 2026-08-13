@@ -284,7 +284,7 @@ const ThreadAttachments = ({ attachments }: { attachments: Attachment[] }) => {
     <div className="mt-2 w-full">
       <div className="flex items-center gap-2">
         <span className="text-sm font-medium">
-          Thread Attachments <span className="text-[#8D8D8D]">[{attachments.length}]</span>
+          Thread Attachments <span className="text-ax-tertiary">[{attachments.length}]</span>
         </span>
       </div>
       <div className="mt-2 flex flex-wrap gap-2">
@@ -292,7 +292,7 @@ const ThreadAttachments = ({ attachments }: { attachments: Attachment[] }) => {
           <button
             key={`${attachment.attachmentId}-${attachment.filename}`}
             onClick={() => handleDownload(attachment)}
-            className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-[#F0F0F0] dark:bg-[#262626] dark:hover:bg-[#303030]"
+            className="ax-pressable ax-type-ui flex cursor-pointer items-center gap-2 rounded-ax-control border border-ax-border bg-ax-raised px-2 py-1 text-ax-primary transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ax-ring"
           >
             <span className="text-muted-foreground">{getFileIcon(attachment.filename)}</span>
             <span className="max-w-[200px] truncate" title={attachment.filename}>
@@ -1166,14 +1166,14 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
         <PopoverTrigger asChild>
           <div
             key={person.email}
-            className="dark:bg-panelDark inline-flex items-center justify-start gap-1.5 overflow-hidden rounded-full border bg-white p-1 pr-2"
+            className="inline-flex items-center justify-start gap-1.5 overflow-hidden rounded-full border border-ax-border bg-ax-raised p-1 pr-2"
           >
             <BimiAvatar
               email={person.email}
               name={person.name || person.email}
               className="h-5 w-5"
             />
-            <div className="text-panelDark justify-start text-sm font-medium leading-none dark:text-white">
+            <div className="ax-type-ui justify-start font-[var(--ax-weight-medium)] leading-none text-ax-primary">
               {person.name || person.email}
             </div>
           </div>
@@ -1254,7 +1254,7 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
                 <span className="inline-flex items-center gap-2 font-medium text-black dark:text-white">
                   <span>
                     {emailData.subject}{' '}
-                    <span className="text-muted-foreground dark:text-[#8C8C8C]">
+                    <span className="text-muted-foreground text-ax-tertiary">
                       {totalEmails && totalEmails > 1 && `[${totalEmails}]`}
                     </span>
                   </span>
@@ -1265,13 +1265,13 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
                     <MailDisplayLabels labels={emailData?.tags.map((t) => t.name) || []} />
                   ) : null}
                   {emailData?.tags?.length ? (
-                    <div className="bg-iconLight dark:bg-iconDark/20 relative h-3 w-0.5 rounded-full" />
+                    <div className="bg-ax-border-strong relative h-3 w-0.5 rounded-full" />
                   ) : null}
                   <RenderLabels labels={threadLabels} />
                   {threadLabels.length ? (
-                    <div className="bg-iconLight dark:bg-iconDark/20 relative h-3 w-0.5 rounded-full" />
+                    <div className="bg-ax-border-strong relative h-3 w-0.5 rounded-full" />
                   ) : null}
-                  <div className="text-muted-foreground flex items-center gap-2 text-sm dark:text-[#8C8C8C]">
+                  <div className="text-muted-foreground flex items-center gap-2 text-sm text-ax-tertiary">
                     {(() => {
                       if (people.length <= 2) {
                         return people.map(renderPerson);
@@ -1339,7 +1339,7 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
                                   //   extra: emailData?.sender?.extra || '',
                                 });
                               }}
-                              className="hover:bg-muted font-semibold"
+                              className="rounded-[4px] font-[var(--ax-weight-semibold)] hover:bg-ax-hover"
                             >
                               {cleanNameDisplay(emailData?.sender?.name)}
                             </span>
@@ -1349,7 +1349,7 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
                           <Popover open={openDetailsPopover} onOpenChange={handlePopoverChange}>
                             <PopoverTrigger asChild>
                               <button
-                                className="hover:bg-iconLight/10 dark:hover:bg-iconDark/20 flex items-center gap-2 rounded-md p-2 cursor-pointer"
+                                className="ax-pressable flex cursor-pointer items-center gap-2 rounded-[4px] p-2 hover:bg-ax-hover"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   e.preventDefault();
@@ -1357,13 +1357,13 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
                                 }}
                                 ref={triggerRef}
                               >
-                                <p className="text-muted-foreground text-xs underline dark:text-[#8C8C8C]">
+                                <p className="ax-type-micro text-ax-tertiary underline underline-offset-2 hover:text-ax-primary">
                                   {m['common.mailDisplay.details']()}
                                 </p>
                               </button>
                             </PopoverTrigger>
                             <PopoverContent
-                              className="dark:bg-panelDark flex w-[420px] overflow-auto rounded-lg border p-4 text-left shadow-lg md:w-auto"
+                              className="flex w-[420px] overflow-auto rounded-ax-surface border-ax-border bg-ax-overlay p-4 text-left shadow-ax-popover md:w-auto"
                               onBlur={(e) => {
                                 if (!triggerRef.current?.contains(e.relatedTarget)) {
                                   setOpenDetailsPopover(false);
@@ -1373,7 +1373,7 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
                             >
                               <div className="space-y-1 text-sm">
                                 <div className="flex">
-                                  <span className="w-24 text-end text-gray-500">
+                                  <span className="w-24 text-end text-ax-tertiary">
                                     {m['common.mailDisplay.from']()}:
                                   </span>
                                   <div className="ml-3">
@@ -1388,7 +1388,7 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
                                   </div>
                                 </div>
                                 <div className="flex">
-                                  <span className="w-24 text-nowrap text-end text-gray-500">
+                                  <span className="w-24 text-nowrap text-end text-ax-tertiary">
                                     {m['common.mailDisplay.to']()}:
                                   </span>
                                   <span className="text-muted-foreground ml-3 text-nowrap">
@@ -1399,7 +1399,7 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
                                 </div>
                                 {emailData?.replyTo && emailData.replyTo.length > 0 && (
                                   <div className="flex">
-                                    <span className="w-24 text-nowrap text-end text-gray-500">
+                                    <span className="w-24 text-nowrap text-end text-ax-tertiary">
                                       {m['common.mailDisplay.replyTo']()}:
                                     </span>
                                     <span className="text-muted-foreground ml-3 text-nowrap">
@@ -1409,7 +1409,7 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
                                 )}
                                 {emailData?.cc && emailData.cc.length > 0 && (
                                   <div className="flex">
-                                    <span className="shrink-0text-nowrap w-24 text-end text-gray-500">
+                                    <span className="shrink-0text-nowrap w-24 text-end text-ax-tertiary">
                                       {m['common.mailDisplay.cc']()}:
                                     </span>
                                     <span className="text-muted-foreground ml-3 text-nowrap">
@@ -1421,7 +1421,7 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
                                 )}
                                 {emailData?.bcc && emailData.bcc.length > 0 && (
                                   <div className="flex">
-                                    <span className="w-24 text-end text-gray-500">
+                                    <span className="w-24 text-end text-ax-tertiary">
                                       {m['common.mailDisplay.bcc']()}:
                                     </span>
                                     <span className="text-muted-foreground ml-3 text-nowrap">
@@ -1432,7 +1432,7 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
                                   </div>
                                 )}
                                 <div className="flex">
-                                  <span className="w-24 text-end text-gray-500">
+                                  <span className="w-24 text-end text-ax-tertiary">
                                     {m['common.mailDisplay.date']()}:
                                   </span>
                                   <span className="text-muted-foreground ml-3 text-nowrap">
@@ -1443,7 +1443,7 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
                                   </span>
                                 </div>
                                 <div className="flex">
-                                  <span className="w-24 text-end text-gray-500">
+                                  <span className="w-24 text-end text-ax-tertiary">
                                     {m['common.mailDisplay.mailedBy']()}:
                                   </span>
                                   <span className="text-muted-foreground ml-3 text-nowrap">
@@ -1451,7 +1451,7 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
                                   </span>
                                 </div>
                                 <div className="flex">
-                                  <span className="w-24 text-end text-gray-500">
+                                  <span className="w-24 text-end text-ax-tertiary">
                                     {m['common.mailDisplay.signedBy']()}:
                                   </span>
                                   <span className="text-muted-foreground ml-3 text-nowrap">
@@ -1460,7 +1460,7 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
                                 </div>
                                 {emailData.tls && (
                                   <div className="flex items-center">
-                                    <span className="w-24 text-end text-gray-500">
+                                    <span className="w-24 text-end text-ax-tertiary">
                                       {m['common.mailDisplay.security']()}:
                                     </span>
                                     <div className="text-muted-foreground ml-3 flex items-center gap-1">
@@ -1475,7 +1475,7 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
                         </div>
 
                         <div className="flex items-center justify-center">
-                          <div className="text-muted-foreground flex-nowrap! mr-2 flex flex-col items-end text-sm font-medium dark:text-[#8C8C8C]">
+                          <div className="text-muted-foreground flex-nowrap! mr-2 flex flex-col items-end text-sm font-medium text-ax-tertiary">
                             <time className="whitespace-nowrap">
                               {emailData?.receivedOn ? formatDate(emailData.receivedOn) : ''}
                             </time>
@@ -1537,7 +1537,7 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
                       </div>
                       <div className="flex justify-between">
                         <div className="flex gap-1">
-                          <p className="text-muted-foreground text-sm font-medium dark:text-[#8C8C8C]">
+                          <p className="text-muted-foreground text-sm font-medium text-ax-tertiary">
                             {m['common.mailDisplay.to']()}:{' '}
                             {(() => {
                               // Combine to and cc recipients
@@ -1572,7 +1572,7 @@ const MailDisplay = ({ emailData, index, totalEmails, demo, threadAttachments }:
                             })()}
                           </p>
                           {(emailData?.bcc?.length || 0) > 0 && (
-                            <p className="text-muted-foreground text-sm font-medium dark:text-[#8C8C8C]">
+                            <p className="text-muted-foreground text-sm font-medium text-ax-tertiary">
                               Bcc:{' '}
                               {emailData?.bcc?.map((recipient, index) => (
                                 <span key={recipient.email}>

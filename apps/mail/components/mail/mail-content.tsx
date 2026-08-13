@@ -157,11 +157,11 @@ export function MailContent({ id, html, senderEmail }: MailContentProps) {
   return (
     <>
       {cspViolation && !isTrustedSender && !data?.settings?.externalImages && (
-        <div className="flex items-center justify-start bg-amber-600/20 px-2 py-1 text-sm text-amber-600">
+        <div className="ax-type-ui flex items-center justify-start bg-ax-warning-muted px-3 py-1.5 text-ax-warning">
           <p>{m['common.actions.hiddenImagesWarning']()}</p>
           <button
             onClick={() => setTemporaryImagesEnabled(!temporaryImagesEnabled)}
-            className="ml-2 cursor-pointer underline"
+            className="ml-2 cursor-pointer underline underline-offset-2 hover:opacity-80"
           >
             {temporaryImagesEnabled
               ? m['common.actions.disableImages']()
@@ -175,7 +175,7 @@ export function MailContent({ id, html, senderEmail }: MailContentProps) {
                 console.error('Error trusting sender:', error);
               }
             }}
-            className="ml-2 cursor-pointer underline"
+            className="ml-2 cursor-pointer underline underline-offset-2 hover:opacity-80"
           >
             {m['common.actions.trustSender']()}
           </button>

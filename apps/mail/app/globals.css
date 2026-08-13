@@ -181,18 +181,6 @@
   --font-mono: var(--font-geist-mono);
 
   /* Animations */
-  @keyframes fade-up {
-    0% { transform: translateY(10px); }
-    100% { transform: translateY(0); }
-  }
-  @keyframes moveUp {
-    0% { transform: translateY(90px); opacity: 0; }
-    100% { transform: translateY(0); opacity: 1; }
-  }
-  @keyframes fadeIn {
-    0% { opacity: 0; }
-    100% { opacity: 1; }
-  }
   @keyframes accordion-down {
     from { height: 0; }
     to { height: var(--radix-accordion-content-height); }
@@ -222,9 +210,6 @@
     50% { opacity: 0; }
   }
 
-  --animate-fade-up: fade-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  --animate-move-up: moveUp 3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  --animate-fade-in: fadeIn 3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   --animate-accordion-down: accordion-down 0.2s ease-out;
   --animate-accordion-up: accordion-up 0.2s ease-out;
   --animate-gauge_fadeIn: gauge_fadeIn 1s ease forwards;

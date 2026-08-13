@@ -29,8 +29,6 @@ import { useAISidebar } from '@/components/ui/ai-sidebar';
 import { EmptyStateIcon } from '../icons/empty-state-svg';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import type { ParsedMessage, Attachment } from '@/types';
-import { useAnimations } from '@/hooks/use-animations';
-import { AnimatePresence, motion } from 'motion/react';
 import { MailDisplaySkeleton } from './mail-skeleton';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Button } from '@/components/ui/button';
@@ -88,7 +86,7 @@ export function ThreadDemo({ messages, isMobile }: ThreadDisplayProps) {
               {[...(messages || [])].reverse().map((message, index) => (
                 <div
                   key={message.id}
-                  className={cn('duration-200', index > 0 && 'border-border border-t')}
+                  className={cn('duration-200', index > 0 && 'border-ax-border-subtle border-t')}
                 >
                   <MailDisplay
                     demo
@@ -133,11 +131,11 @@ function ThreadActionButton({
             disabled={disabled}
             onClick={onClick}
             variant="ghost"
-            className={cn('md:h-fit md:px-2', className)}
+            className={cn('ax-pressable rounded-ax-control focus-visible:ring-2 focus-visible:ring-ax-ring md:h-fit md:px-2', className)}
             onMouseEnter={() => iconRef.current?.startAnimation?.()}
             onMouseLeave={() => iconRef.current?.stopAnimation?.()}
           >
-            <Icon ref={iconRef} className="dark:fill-iconDark fill-iconLight" />
+            <Icon ref={iconRef} className="fill-ax-secondary" />
             <span className="sr-only">{label}</span>
           </Button>
         </TooltipTrigger>
@@ -158,9 +156,6 @@ export function ThreadDisplay() {
   const [, items] = useThreads();
   const [isStarred, setIsStarred] = useState(false);
 
-  const [navigationDirection, setNavigationDirection] = useState<'previous' | 'next' | null>(null);
-
-  const animationsEnabled = useAnimations();
 
   // Collect all attachments from all messages in the thread
   const allThreadAttachments = useMemo(() => {
@@ -196,9 +191,6 @@ export function ThreadDisplay() {
         setDraftId(null);
         setThreadId(nextThread.id);
         setFocusedIndex(focusedIndex + 1);
-        if (animationsEnabled) {
-          setNavigationDirection('next');
-        }
       }
     }
   }, [
@@ -210,7 +202,6 @@ export function ThreadDisplay() {
     setMode,
     setActiveReplyId,
     setDraftId,
-    animationsEnabled,
   ]);
 
   const handleUnsubscribeProcess = () => {
@@ -682,10 +673,6 @@ export function ThreadDisplay() {
     }
   }, [mode, activeReplyId]);
 
-  const handleAnimationComplete = useCallback(() => {
-    setNavigationDirection(null);
-  }, [setNavigationDirection]);
-
   return (
     <div
       className={cn(
@@ -695,7 +682,7 @@ export function ThreadDisplay() {
     >
       <div
         className={cn(
-          'bg-panelLight dark:bg-panelDark relative flex flex-col overflow-hidden rounded-xl duration-300',
+          'bg-ax-surface relative flex flex-col overflow-hidden rounded-xl',
           isMobile ? 'h-full' : 'h-full',
           !isMobile && !isFullscreen && 'rounded-r-lg',
           isFullscreen ? 'fixed inset-0 z-50' : '',
@@ -703,32 +690,32 @@ export function ThreadDisplay() {
       >
         {!id ? (
           <div className="flex h-full items-center justify-center">
-            <div className="flex flex-col items-center justify-center gap-2 text-center">
+            <div className="ax-empty-enter flex flex-col items-center justify-center gap-2 text-center">
               <EmptyStateIcon width={200} height={200} />
               <div className="mt-4">
-                <p className="text-lg">It's empty here</p>
-                <p className="text-md text-muted-foreground dark:text-white/50">
+                <p className="ax-type-body font-[var(--ax-weight-medium)] text-ax-primary">It's empty here</p>
+                <p className="ax-type-ui mt-1 text-ax-tertiary">
                   Choose an email to view details
                 </p>
                 <div className="mt-4 grid grid-cols-1 gap-2 xl:grid-cols-2">
                   <button
                     onClick={toggleAISidebar}
-                    className="inline-flex h-7 items-center justify-center gap-0.5 overflow-hidden rounded-lg border bg-white px-2 dark:border-none dark:bg-[#313131] hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors cursor-pointer"
+                    className="ax-pressable ax-type-ui inline-flex h-7 cursor-pointer items-center justify-center gap-1 overflow-hidden rounded-ax-control border border-ax-border bg-ax-raised px-1.5 text-ax-primary transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ax-ring px-2"
                   >
-                    <Sparkles className="mr-1 h-3.5 w-3.5 fill-[#959595]" />
+                    <Sparkles className="mr-1 h-3.5 w-3.5 fill-ax-tertiary" />
                     <div className="flex items-center justify-center gap-2.5 px-0.5">
-                      <div className="text-base-gray-950 justify-start text-sm leading-none">
+                      <div className="justify-start leading-none">
                         AxMail chat
                       </div>
                     </div>
                   </button>
                   <button
                     onClick={() => setIsComposeOpen('true')}
-                    className="inline-flex h-7 items-center justify-center gap-0.5 overflow-hidden rounded-lg border bg-white px-2 dark:border-none dark:bg-[#313131] hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors cursor-pointer"
+                    className="ax-pressable ax-type-ui inline-flex h-7 cursor-pointer items-center justify-center gap-1 overflow-hidden rounded-ax-control border border-ax-border bg-ax-raised px-1.5 text-ax-primary transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ax-ring px-2"
                   >
-                    <Mail className="mr-1 h-3.5 w-3.5 fill-[#959595]" />
+                    <Mail className="mr-1 h-3.5 w-3.5 fill-ax-tertiary" />
                     <div className="flex items-center justify-center gap-2.5 px-0.5">
-                      <div className="dark:text-base-gray-950 justify-start text-sm leading-none">
+                      <div className="justify-start leading-none">
                         Send email
                       </div>
                     </div>
@@ -750,7 +737,7 @@ export function ThreadDisplay() {
             <div
               className={cn(
                 'flex shrink-0 items-center px-1 pb-[10px] md:px-3 md:pb-[11px] md:pt-[12px]',
-                isMobile && 'bg-panelLight dark:bg-panelDark sticky top-0 z-10 mt-2',
+                isMobile && 'bg-ax-surface sticky top-0 z-10 mt-2',
               )}
             >
               <div className="flex flex-1 items-center gap-2">
@@ -759,12 +746,12 @@ export function ThreadDisplay() {
                     <TooltipTrigger asChild>
                       <button
                         onClick={handleClose}
-                        className="inline-flex h-7 w-7 items-center justify-center gap-1 overflow-hidden rounded-md hover:bg-white md:hidden dark:hover:bg-[#313131]"
+                        className="ax-pressable inline-flex h-7 w-7 items-center justify-center gap-1 overflow-hidden rounded-ax-control text-ax-secondary hover:bg-ax-hover md:hidden"
                       >
-                        <X className="fill-iconLight dark:fill-iconDark h-3.5 w-3.5" />
+                        <X className="fill-ax-secondary h-3.5 w-3.5" />
                       </button>
                     </TooltipTrigger>
-                    <TooltipContent side="bottom" className="bg-white dark:bg-[#313131]">
+                    <TooltipContent side="bottom" className="bg-ax-overlay">
                       {m['common.actions.close']()}
                     </TooltipContent>
                   </Tooltip>
@@ -783,11 +770,11 @@ export function ThreadDisplay() {
                     setMode('replyAll');
                     setActiveReplyId(emailData?.latest?.id ?? '');
                   }}
-                  className="inline-flex h-7 items-center justify-center gap-1 overflow-hidden rounded-lg border bg-white px-1.5 dark:border-none dark:bg-[#313131] hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors cursor-pointer"
+                  className="ax-pressable ax-type-ui inline-flex h-7 cursor-pointer items-center justify-center gap-1 overflow-hidden rounded-ax-control border border-ax-border bg-ax-raised px-1.5 text-ax-primary transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ax-ring"
                 >
-                  <Reply className="fill-muted-foreground dark:fill-[#9B9B9B]" />
+                  <Reply className="fill-ax-secondary" />
                   <div className="flex items-center justify-center gap-2.5 pl-0.5 pr-1">
-                    <div className="justify-start whitespace-nowrap text-sm leading-none text-black dark:text-white">
+                    <div className="justify-start whitespace-nowrap leading-none">
                       {m['common.threadDisplay.replyAll']()}
                     </div>
                   </div>
@@ -798,19 +785,19 @@ export function ThreadDisplay() {
                     <TooltipTrigger asChild>
                       <button
                         onClick={handleToggleStar}
-                        className="inline-flex h-7 w-7 items-center justify-center gap-1 overflow-hidden rounded-lg bg-white dark:bg-[#313131] hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors cursor-pointer"
+                        className="ax-pressable inline-flex h-7 w-7 cursor-pointer items-center justify-center gap-1 overflow-hidden rounded-ax-control bg-ax-raised text-ax-secondary transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-overlay hover:text-ax-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ax-ring"
                       >
                         <Star
                           className={cn(
                             'ml-[2px] mt-[2.4px] h-5 w-5',
                             isStarred
-                              ? 'fill-yellow-400 stroke-yellow-400'
-                              : 'fill-transparent stroke-[#9D9D9D] dark:stroke-[#9D9D9D]',
+                              ? 'fill-ax-warning stroke-ax-warning'
+                              : 'fill-transparent stroke-ax-tertiary',
                           )}
                         />
                       </button>
                     </TooltipTrigger>
-                    <TooltipContent side="bottom" className="bg-white dark:bg-[#313131]">
+                    <TooltipContent side="bottom" className="bg-ax-overlay">
                       {isStarred
                         ? m['common.threadDisplay.unstar']()
                         : m['common.threadDisplay.star']()}
@@ -823,12 +810,12 @@ export function ThreadDisplay() {
                     <TooltipTrigger asChild>
                       <button
                         onClick={() => moveThreadTo('archive')}
-                        className="inline-flex h-7 w-7 items-center justify-center gap-1 overflow-hidden rounded-lg bg-white dark:bg-[#313131] hover:bg-gray-100 dark:hover:bg-[#404040] transition-colors cursor-pointer"
+                        className="ax-pressable inline-flex h-7 w-7 cursor-pointer items-center justify-center gap-1 overflow-hidden rounded-ax-control bg-ax-raised text-ax-secondary transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-overlay hover:text-ax-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ax-ring"
                       >
                         <Archive className="fill-iconLight dark:fill-iconDark" />
                       </button>
                     </TooltipTrigger>
-                    <TooltipContent side="bottom" className="bg-white dark:bg-[#313131]">
+                    <TooltipContent side="bottom" className="bg-ax-overlay">
                       {m['common.threadDisplay.archive']()}
                     </TooltipContent>
                   </Tooltip>
@@ -840,12 +827,12 @@ export function ThreadDisplay() {
                       <TooltipTrigger asChild>
                         <button
                           onClick={() => moveThreadTo('bin')}
-                          className="inline-flex h-7 w-7 items-center justify-center gap-1 overflow-hidden rounded-lg border border-[#FCCDD5] bg-[#FDE4E9] hover:bg-[#fccdd5]/70 dark:border-[#6E2532] dark:bg-[#411D23] dark:hover:bg-[#6E2532]/70 cursor-pointer transition-colors"
+                          className="ax-pressable inline-flex h-7 w-7 cursor-pointer items-center justify-center gap-1 overflow-hidden rounded-ax-control bg-ax-danger-muted transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-danger/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ax-ring"
                         >
-                          <Trash className="fill-[#F43F5E]" />
+                          <Trash className="fill-ax-danger" />
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="bottom" className="bg-white dark:bg-[#313131]">
+                      <TooltipContent side="bottom" className="bg-ax-overlay">
                         {m['common.mail.moveToBin']()}
                       </TooltipContent>
                     </Tooltip>
@@ -854,13 +841,13 @@ export function ThreadDisplay() {
 
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <button type="button" aria-label="Thread actions" aria-haspopup="menu" className="inline-flex h-7 w-7 items-center justify-center gap-1 overflow-hidden rounded-lg bg-white cursor-pointer focus:outline-hidden focus:ring-0 dark:bg-[#313131] transition-colors">
+                    <button type="button" aria-label="Thread actions" aria-haspopup="menu" className="ax-pressable inline-flex h-7 w-7 cursor-pointer items-center justify-center gap-1 overflow-hidden rounded-ax-control bg-ax-raised text-ax-secondary transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-overlay hover:text-ax-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ax-ring">
                       <ThreeDots className="fill-iconLight dark:fill-iconDark" />
                     </button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="bg-white dark:bg-[#313131]">
+                  <DropdownMenuContent align="end" className="ax-type-ui border-ax-border bg-ax-overlay text-ax-primary shadow-ax-popover">
                     {/* <DropdownMenuItem onClick={() => setIsFullscreen(!isFullscreen)}>
-                      <Expand className="fill-iconLight dark:fill-iconDark mr-2" />
+                      <Expand className="fill-ax-secondary mr-2" />
                       <span>
                         {isFullscreen
                           ? t('common.threadDisplay.exitFullscreen')
@@ -881,17 +868,17 @@ export function ThreadDisplay() {
                             printThread();
                           }}
                         >
-                          <Printer className="fill-iconLight dark:fill-iconDark mr-2 h-4 w-4" />
+                          <Printer className="fill-ax-secondary mr-2 h-4 w-4" />
                           <span>{m['common.threadDisplay.printThread']()}</span>
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => moveThreadTo('spam')}>
-                          <ArchiveX className="fill-iconLight dark:fill-iconDark mr-2" />
+                          <ArchiveX className="fill-ax-secondary mr-2" />
                           <span>{m['common.threadDisplay.moveToSpam']()}</span>
                         </DropdownMenuItem>
                         {emailData.latest?.listUnsubscribe ||
                         emailData.latest?.listUnsubscribePost ? (
                           <DropdownMenuItem onClick={handleUnsubscribeProcess}>
-                            <Folders className="fill-iconLight dark:fill-iconDark mr-2" />
+                            <Folders className="fill-ax-secondary mr-2" />
                             <span>{m['common.mailDisplay.unsubscribe']()}</span>
                           </DropdownMenuItem>
                         ) : null}
@@ -902,67 +889,26 @@ export function ThreadDisplay() {
               </div>
             </div>
             <div className={cn('flex min-h-0 flex-1 flex-col', isMobile && 'h-full')}>
-              {animationsEnabled ? (
-                <AnimatePresence mode="wait" initial={false}>
-                  <motion.div
-                    key={id}
-                    initial={{
-                      opacity: 0,
-                      x:
-                        navigationDirection === 'previous'
-                          ? -25
-                          : navigationDirection === 'next'
-                            ? 25
-                            : 0,
-                    }}
-                    animate={{
-                      opacity: 1,
-                      x: 0,
-                    }}
-                    exit={{
-                      opacity: 0,
-                      x:
-                        navigationDirection === 'previous'
-                          ? 25
-                          : navigationDirection === 'next'
-                            ? -25
-                            : 0,
-                    }}
-                    transition={{
-                      duration: 0.08,
-                      ease: [0.4, 0, 0.2, 1],
-                    }}
-                    onAnimationComplete={handleAnimationComplete}
-                    className="h-full w-full"
-                  >
-                    <MessageList
-                      messages={emailData.messages}
-                      isFullscreen={isFullscreen}
-                      totalReplies={emailData?.totalReplies}
-                      allThreadAttachments={allThreadAttachments}
-                      mode={mode || undefined}
-                      activeReplyId={activeReplyId || undefined}
-                      isMobile={isMobile}
-                    />
-                  </motion.div>
-                </AnimatePresence>
-              ) : (
-                <MessageList
-                  messages={emailData.messages}
-                  isFullscreen={isFullscreen}
-                  totalReplies={emailData?.totalReplies}
-                  allThreadAttachments={allThreadAttachments}
-                  mode={mode || undefined}
-                  activeReplyId={activeReplyId || undefined}
-                  isMobile={isMobile}
-                />
-              )}
+              {/* Thread navigation renders INSTANTLY. The 25px slide that
+                  lived here animated a keyboard-driven action (j/k), and
+                  AnimatePresence mode="wait" serialized exit before enter —
+                  fast navigation waited on animation. Per the approved
+                  motion plan: keyboard actions never animate. */}
+              <MessageList
+                messages={emailData.messages}
+                isFullscreen={isFullscreen}
+                totalReplies={emailData?.totalReplies}
+                allThreadAttachments={allThreadAttachments}
+                mode={mode || undefined}
+                activeReplyId={activeReplyId || undefined}
+                isMobile={isMobile}
+              />
 
               {mode &&
                 activeReplyId &&
                 activeReplyId === emailData.messages[emailData.messages.length - 1]?.id && (
                   <div
-                    className="border-border bg-panelLight dark:bg-panelDark sticky bottom-0 z-10 border-t px-4 py-2"
+                    className="border-ax-border-subtle bg-ax-surface sticky bottom-0 z-10 border-t px-4 py-2"
                     id={`reply-composer-${activeReplyId}`}
                   >
                     <ReplyCompose messageId={activeReplyId} />
@@ -1004,7 +950,7 @@ const MessageList = ({
         return (
           <div
             key={message.id}
-            className={cn('duration-200', index > 0 && 'border-border border-t')}
+            className={cn('duration-200', index > 0 && 'border-ax-border-subtle border-t')}
           >
             <MailDisplay
               emailData={message}

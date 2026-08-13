@@ -464,7 +464,13 @@ export function MailLayout() {
                         </div>
                       </Button>
 
-                      {activeConnection?.providerId === 'google' && folder === 'inbox' && (
+                      {/* Provider gate removed (was providerId === 'google'):
+                          it guarded the old Gmail search-query categories
+                          (is:important etc., upstream 38c567cc); since
+                          upstream 01e2adf4 categories are label-based
+                          filters that work on any provider, IMAP included.
+                          The dropdown still self-gates to the inbox. */}
+                      {folder === 'inbox' && (
                         <CategoryDropdown isMultiSelectMode={mail.bulkSelected.length > 0} />
                       )}
                     </>
@@ -684,13 +690,11 @@ function CategoryDropdown({ isMultiSelectMode }: CategoryDropdownProps) {
     (key) => {
       const category = categorySettings[Number(key.key) - 1];
       if (!category) return;
-      const isCurrentlyActive = labels.includes(category.searchValue);
-
-      if (isCurrentlyActive) {
-        setLabels(labels.filter((label) => label !== category.searchValue));
-      } else {
-        setLabels([...labels, category.searchValue]);
-      }
+      // Route through the same handler the menu items use. The old inline
+      // toggle skipped handleLabelChange's empty/comma handling, so the key
+      // for "All Mail" (searchValue '') pushed an empty-string label into
+      // the filter and blanked the list instead of clearing it.
+      handleLabelChange(category.searchValue);
     },
     {
       scopes: ['mail-list'],

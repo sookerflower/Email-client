@@ -531,6 +531,19 @@
   }
 }
 
+/* Empty-state entrance — the "delight slot" from the approved motion plan:
+   one 280ms fade-up on mount. Never applied to list rows or anything on the
+   hot path. */
+@utility ax-empty-enter {
+  transition:
+    transform var(--ax-dur-slow) var(--ax-ease-out),
+    opacity var(--ax-dur-slow) var(--ax-ease-out);
+  @starting-style {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
 /* Unified origin-aware entrance for Radix popper content (dropdowns,
    popovers, tooltips): token duration + curve applied to the animate-in
    keyframes, transform-origin anchored to the trigger. */

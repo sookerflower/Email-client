@@ -382,7 +382,9 @@ export function MailLayout() {
   }, []);
 
   const defaultCategoryId = useDefaultCategoryId();
-  const [category] = useQueryState('category', { defaultValue: defaultCategoryId });
+  // Query-state subscription retained: keeps the ?category param stable in
+  // the URL while the fetch strip no longer varies its color per category.
+  useQueryState('category', { defaultValue: defaultCategoryId });
 
   const handleClearFilters = useCallback(
     (e: React.MouseEvent) => {
@@ -417,7 +419,7 @@ export function MailLayout() {
             minSize={35}
             maxSize={35}
             className={cn(
-              `bg-panelLight dark:bg-panelDark mb-1 w-fit shadow-sm md:mr-[3px] md:rounded-2xl lg:flex lg:h-[calc(100dvh-8px)] lg:shadow-sm`,
+              `bg-ax-surface mb-1 w-fit shadow-ax-raised md:mr-[3px] md:rounded-2xl lg:flex lg:h-[calc(100dvh-8px)]`,
               isDesktop && threadId && 'hidden lg:block',
             )}
             // onMouseEnter={handleMailListMouseEnter}
@@ -425,21 +427,21 @@ export function MailLayout() {
           >
             <div className="w-full md:h-[calc(100dvh-10px)]">
               <div className="z-15 sticky top-0 p-4 pb-0">
-                <div className="flex items-center gap-2">
-                  <SidebarToggle className="h-10 w-10" />
+                <div className="flex h-[var(--ax-toolbar-h)] items-center gap-2">
+                  <SidebarToggle className="h-8 w-8" />
 
                   {mail.bulkSelected.length === 0 ? (
                     <>
                       <Button
                         variant="outline"
                         className={cn(
-                          'text-muted-foreground border-border/40 bg-background/50 hover:bg-accent/30 focus-visible:ring-ring dark:border-border/20 dark:bg-background/40 flex h-10 flex-1 select-none items-center justify-between overflow-hidden rounded-lg border px-3 text-left text-sm font-normal shadow-none ring-0 backdrop-blur-sm transition-all focus-visible:ring-2 focus-visible:ring-offset-2',
+                          'ax-type-ui flex h-8 flex-1 select-none items-center justify-between overflow-hidden rounded-ax-control border border-ax-border bg-ax-raised px-3 text-left font-[var(--ax-weight-normal)] text-ax-secondary shadow-none ring-0 transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-overlay hover:text-ax-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ax-ring',
                         )}
                         onClick={handleOpenCommandPalette}
                       >
                         <div className="flex min-w-0 flex-1 items-center gap-2 pr-2">
-                          <Search className="fill-muted-foreground h-4 w-4 shrink-0" />
-                          <span className="truncate text-sm">
+                          <Search className="fill-ax-tertiary h-4 w-4 shrink-0" />
+                          <span className="ax-type-ui truncate">
                             {activeFilters.length > 0
                               ? activeFilters.map((f) => f.display).join(', ')
                               : 'Search'}
@@ -451,15 +453,15 @@ export function MailLayout() {
                             <Button
                               variant="secondary"
                               size="sm"
-                              className="h-6 rounded-md px-2 text-xs"
+                              className="ax-pressable ax-type-small h-6 rounded-[4px] bg-ax-active px-2 text-ax-primary hover:bg-ax-active"
                               onClick={handleClearFilters}
                             >
                               Clear
                             </Button>
                           )}
-                          <kbd className="bg-muted border-border/40 dark:bg-muted/40 pointer-events-none hidden h-6 select-none items-center gap-1 rounded border px-2 text-xs font-medium opacity-80 sm:flex">
-                            <span className="text-sm font-sans">⌘</span>
-                            <span className="text-xs">K</span>
+                          <kbd className="ax-type-micro pointer-events-none hidden h-5 select-none items-center gap-1 rounded-[4px] border border-ax-border bg-ax-base px-1.5 text-ax-tertiary sm:flex">
+                            <span className="font-sans">⌘</span>
+                            <span>K</span>
                           </kbd>
                         </div>
                       </Button>
@@ -476,7 +478,7 @@ export function MailLayout() {
                     </>
                   ) : (
                     <div className="flex flex-1 items-center justify-between">
-                      <div className="text-foreground text-sm font-medium">
+                      <div className="ax-type-ui font-[var(--ax-weight-medium)] text-ax-primary">
                         {mail.bulkSelected.length} selected
                       </div>
                       <Tooltip>
@@ -485,10 +487,10 @@ export function MailLayout() {
                             variant="secondary"
                             size="sm"
                             onClick={handleExitBulkSelection}
-                            className="h-8 gap-2 rounded-lg"
+                            className="ax-pressable ax-type-small h-7 gap-1.5 rounded-ax-control border border-ax-border bg-ax-raised text-ax-secondary hover:bg-ax-overlay hover:text-ax-primary focus-visible:ring-2 focus-visible:ring-ax-ring"
                           >
                             <X className="h-3 w-3" />
-                            <span className="text-xs">ESC</span>
+                            <span>ESC</span>
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
@@ -502,18 +504,19 @@ export function MailLayout() {
                     onClick={handleRefetchThreads}
                     variant="ghost"
                     size="icon"
-                    className="border-none bg-transparent hover:bg-accent/50 h-10 w-10 rounded-lg backdrop-blur-sm"
+                    className="ax-pressable h-8 w-8 rounded-ax-control border-none bg-transparent text-ax-tertiary hover:bg-ax-hover hover:text-ax-primary focus-visible:ring-2 focus-visible:ring-ax-ring"
                   >
-                    <RefreshCcw className="text-muted-foreground h-4 w-4" />
+                    <RefreshCcw className="h-4 w-4" />
                   </Button>
                 </div>
               </div>
 
               <div className="px-4 pt-2">
+                {/* Fetch-activity strip: one accent, not a per-category hex
+                    map — state indication via opacity only. */}
                 <div
                   className={cn(
-                    `${category === 'Important' ? 'bg-[#F59E0D]' : category === 'All Mail' ? 'bg-[#006FFE]' : category === 'Personal' ? 'bg-[#39ae4a]' : category === 'Updates' ? 'bg-[#8B5CF6]' : category === 'Promotions' ? 'bg-[#F43F5E]' : category === 'Unread' ? 'bg-[#FF4800]' : 'bg-[#F59E0D]'}`,
-                    'h-0.5 w-full rounded-full transition-opacity',
+                    'h-0.5 w-full rounded-full bg-ax-accent transition-opacity duration-[var(--ax-dur-fast)]',
                     isFetching ? 'opacity-100' : 'opacity-0',
                   )}
                 />
@@ -742,7 +745,7 @@ function CategoryDropdown({ isMultiSelectMode }: CategoryDropdownProps) {
         <Button
           variant="outline"
           className={cn(
-            'text-muted-foreground border-border/40 bg-background/50 hover:bg-accent/30 dark:border-border/20 dark:bg-background/40 flex h-10 items-center justify-center gap-1.5 rounded-lg border px-3 backdrop-blur-sm transition-all',
+            'ax-pressable flex h-8 items-center justify-center gap-1.5 rounded-ax-control border border-ax-border bg-ax-raised px-2.5 text-ax-secondary transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-overlay hover:text-ax-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ax-ring',
           )}
           aria-label="Filter by labels"
           aria-expanded={isOpen}
@@ -750,28 +753,31 @@ function CategoryDropdown({ isMultiSelectMode }: CategoryDropdownProps) {
         >
           <SlidersHorizontal className="h-4 w-4" />
           {labels.length > 0 && (
-            <span className="bg-primary/20 text-primary rounded-full px-1.5 text-[11px] font-medium">
+            <span className="ax-type-micro rounded-full bg-ax-accent-muted px-1.5 text-ax-accent">
               {labels.length}
             </span>
           )}
           <ChevronDown
             className={cn(
-              'text-muted-foreground h-4 w-4 transition-transform duration-200',
+              'h-4 w-4 transition-transform duration-[var(--ax-dur-base)] ease-ax-out',
               isOpen ? 'rotate-180' : 'rotate-0',
             )}
           />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        className="border-border/50 bg-muted w-48 rounded-xl border p-2 dark:bg-[#232323]"
+        className="w-52 rounded-ax-surface border border-ax-border bg-ax-overlay p-1 shadow-ax-popover"
         align="start"
         role="menu"
         aria-label="Label filter options"
       >
+        {/* Two entries is the intended default set, not a bug — the header
+            and footer make the menu read as a deliberate, extendable list. */}
+        <p className="ax-type-micro px-2 pb-1 pt-1.5 uppercase text-ax-tertiary">Views</p>
         {categorySettings.map((category) => (
           <DropdownMenuItem
             key={category.id}
-            className="hover:bg-accent/50 flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors"
+            className="ax-type-ui flex cursor-pointer items-center gap-3 rounded-[calc(var(--ax-radius-surface)-4px)] px-2 py-1.5 text-ax-primary hover:bg-ax-hover"
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -780,17 +786,18 @@ function CategoryDropdown({ isMultiSelectMode }: CategoryDropdownProps) {
             role="menuitemcheckbox"
             aria-checked={labels.includes(category.id)}
           >
-            <span className="text-foreground font-medium capitalize">
-              {category.name.toLowerCase()}
-            </span>
+            <span className="capitalize">{category.name.toLowerCase()}</span>
             {/* Special case: empty searchValue means "All Mail" - shows everything */}
             {(category.searchValue === ''
               ? labels.length === 0
               : category.searchValue.split(',').some((val) => labels.includes(val))) && (
-              <Check className="text-primary ml-auto h-4 w-4" />
+              <Check className="ml-auto h-4 w-4 text-ax-accent" />
             )}
           </DropdownMenuItem>
         ))}
+        <div className="ax-type-micro mt-1 border-t border-ax-border-subtle px-2 pb-1 pt-1.5 text-ax-tertiary">
+          Customize views in Settings → Categories
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   );

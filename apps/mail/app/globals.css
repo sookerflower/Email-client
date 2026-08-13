@@ -468,6 +468,84 @@
   --ease-ax-drawer: var(--ax-ease-drawer);
 }
 
+/* Legacy shadcn sidebar ring → token ring, so keyboard focus in the shell
+   carries the redesign's accent (declared after the original :root/.dark
+   definitions on purpose — this override must win). */
+:root,
+.dark {
+  --sidebar-ring: var(--ax-ring);
+}
+
+/* --- Token-consuming utilities (added in phase 1, app-wide) --------------- */
+
+/* Type scale as composable classes — size, leading, tracking, weight. */
+@utility ax-type-display {
+  font-size: var(--ax-text-display);
+  line-height: var(--ax-leading-display);
+  letter-spacing: var(--ax-track-display);
+  font-weight: var(--ax-weight-semibold);
+}
+@utility ax-type-title {
+  font-size: var(--ax-text-title);
+  line-height: var(--ax-leading-title);
+  letter-spacing: var(--ax-track-title);
+  font-weight: var(--ax-weight-semibold);
+}
+@utility ax-type-heading {
+  font-size: var(--ax-text-heading);
+  line-height: var(--ax-leading-heading);
+  letter-spacing: var(--ax-track-heading);
+  font-weight: var(--ax-weight-semibold);
+}
+@utility ax-type-body {
+  font-size: var(--ax-text-body);
+  line-height: var(--ax-leading-body);
+  letter-spacing: var(--ax-track-body);
+  font-weight: var(--ax-weight-normal);
+}
+@utility ax-type-ui {
+  font-size: var(--ax-text-ui);
+  line-height: var(--ax-leading-ui);
+  letter-spacing: var(--ax-track-ui);
+  font-weight: var(--ax-weight-normal);
+}
+@utility ax-type-small {
+  font-size: var(--ax-text-small);
+  line-height: var(--ax-leading-small);
+  letter-spacing: var(--ax-track-small);
+  font-weight: var(--ax-weight-normal);
+}
+@utility ax-type-micro {
+  font-size: var(--ax-text-micro);
+  line-height: var(--ax-leading-micro);
+  letter-spacing: var(--ax-track-micro);
+  font-weight: var(--ax-weight-medium);
+}
+
+/* Press feedback — the one animation every pressable gets (120ms, strong
+   ease-out, transform only). Pointer-initiated by nature (:active). */
+@utility ax-pressable {
+  transition: transform var(--ax-dur-press) var(--ax-ease-out);
+  &:active {
+    transform: scale(0.97);
+  }
+}
+
+/* Unified origin-aware entrance for Radix popper content (dropdowns,
+   popovers, tooltips): token duration + curve applied to the animate-in
+   keyframes, transform-origin anchored to the trigger. */
+@utility ax-menu-motion {
+  animation-duration: var(--ax-dur-base);
+  animation-timing-function: var(--ax-ease-out);
+  transform-origin: var(
+    --radix-dropdown-menu-content-transform-origin,
+    var(
+      --radix-popover-content-transform-origin,
+      var(--radix-tooltip-content-transform-origin, center)
+    )
+  );
+}
+
 .skeleton {
   * {
     @apply pointer-events-none!;

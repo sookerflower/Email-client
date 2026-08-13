@@ -112,14 +112,9 @@ export default function DesignShowcase() {
   const [dark, setDark] = useState(true);
   return (
     <div className={dark ? 'dark' : ''}>
+      {/* Type utilities moved to globals.css in phase 1; only the demo-local
+          entrance rules remain here. */}
       <style>{`
-        .ax-type-display { font-size: var(--ax-text-display); line-height: var(--ax-leading-display); letter-spacing: var(--ax-track-display); font-weight: var(--ax-weight-semibold); }
-        .ax-type-title { font-size: var(--ax-text-title); line-height: var(--ax-leading-title); letter-spacing: var(--ax-track-title); font-weight: var(--ax-weight-semibold); }
-        .ax-type-heading { font-size: var(--ax-text-heading); line-height: var(--ax-leading-heading); letter-spacing: var(--ax-track-heading); font-weight: var(--ax-weight-semibold); }
-        .ax-type-body { font-size: var(--ax-text-body); line-height: var(--ax-leading-body); letter-spacing: var(--ax-track-body); font-weight: var(--ax-weight-normal); }
-        .ax-type-ui { font-size: var(--ax-text-ui); line-height: var(--ax-leading-ui); letter-spacing: var(--ax-track-ui); font-weight: var(--ax-weight-normal); }
-        .ax-type-small { font-size: var(--ax-text-small); line-height: var(--ax-leading-small); letter-spacing: var(--ax-track-small); font-weight: var(--ax-weight-normal); }
-        .ax-type-micro { font-size: var(--ax-text-micro); line-height: var(--ax-leading-micro); letter-spacing: var(--ax-track-micro); font-weight: var(--ax-weight-medium); }
         .ax-popover-enter { transition: transform var(--ax-dur-base) var(--ax-ease-out), opacity var(--ax-dur-base) var(--ax-ease-out); }
         @starting-style { .ax-popover-enter { opacity: 0; transform: scale(0.97); } }
         .ax-empty-enter { transition: transform var(--ax-dur-slow) var(--ax-ease-out), opacity var(--ax-dur-slow) var(--ax-ease-out); }

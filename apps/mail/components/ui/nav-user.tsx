@@ -55,7 +55,7 @@ function SyncingStatusIndicator({
         <div
           className={cn(
             'h-2 w-2 rounded-full',
-            isSyncing || storageSize === 0 ? 'animate-pulse bg-orange-500' : 'bg-green-500',
+            isSyncing || storageSize === 0 ? 'animate-pulse bg-ax-warning' : 'bg-ax-success',
           )}
         />
       </div>
@@ -178,16 +178,16 @@ export function NavUser() {
           activeAccount && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <div className="flex cursor-pointer items-center">
+                <div className="ax-pressable flex cursor-pointer items-center">
                   <div className="relative">
-                    <Avatar className="relative left-0.5 size-7 rounded-[5px]">
+                    <Avatar className="relative left-0.5 size-7 rounded-ax-control">
                       <AvatarImage
-                        className="rounded-[5px]"
+                        className="rounded-ax-control"
                         src={activeAccount?.picture || undefined}
                         alt={activeAccount?.name || activeAccount?.email}
                       />
 
-                      <AvatarFallback className="rounded-[5px] text-[10px]">
+                      <AvatarFallback className="rounded-ax-control text-[10px]">
                         {(activeAccount?.name || activeAccount?.email || '')
                           .split(' ')
                           .map((n: string) => n[0])
@@ -200,7 +200,7 @@ export function NavUser() {
                 </div>
               </DropdownMenuTrigger>
               <DropdownMenuContent
-                className="w-(--radix-dropdown-menu-trigger-width) ml-3 min-w-56 bg-white font-medium dark:bg-[#131313]"
+                className="w-(--radix-dropdown-menu-trigger-width) ml-3 min-w-56 ax-type-ui border-ax-border bg-ax-overlay text-ax-primary shadow-ax-popover"
                 align="end"
                 side={'bottom'}
                 sideOffset={8}
@@ -250,7 +250,7 @@ export function NavUser() {
                         <DropdownMenuItem
                           key={connection.id}
                           onClick={handleAccountSwitch(connection.id)}
-                          className="flex cursor-pointer items-center gap-3 py-1"
+                          className="ax-pressable flex cursor-pointer items-center gap-3 py-1"
                         >
                           <Avatar className="size-7 rounded-lg">
                             <AvatarImage
@@ -352,20 +352,20 @@ export function NavUser() {
                 <div
                   key={activeAccount.id}
                   onClick={handleAccountSwitch(activeAccount.id)}
-                  className={`flex cursor-pointer items-center ${
+                  className={`ax-pressable flex cursor-pointer items-center ${
                     activeAccount.id === activeConnection?.id && data.connections.length > 1
-                      ? 'outline-mainBlue rounded-[5px] outline outline-2'
+                      ? 'outline-ax-accent rounded-ax-control outline outline-2'
                       : ''
                   }`}
                 >
                   <div className="relative">
-                    <Avatar className="size-7 rounded-[5px]">
+                    <Avatar className="size-7 rounded-ax-control">
                       <AvatarImage
-                        className="rounded-[5px]"
+                        className="rounded-ax-control"
                         src={activeAccount.picture || undefined}
                         alt={activeAccount.name || activeAccount.email}
                       />
-                      <AvatarFallback className="rounded-[5px] text-[10px]">
+                      <AvatarFallback className="rounded-ax-control text-[10px]">
                         {(activeAccount.name || activeAccount.email)
                           .split(' ')
                           .map((n) => n[0])
@@ -375,14 +375,14 @@ export function NavUser() {
                       </AvatarFallback>
                     </Avatar>
                     {activeAccount.id === activeConnection?.id && data.connections.length > 1 && (
-                      <CircleCheck className="fill-mainBlue absolute -bottom-2 -right-2 size-4 rounded-full bg-white dark:bg-[#141414]" />
+                      <CircleCheck className="fill-ax-accent absolute -bottom-2 -right-2 size-4 rounded-full bg-white bg-ax-base dark:bg-ax-base" />
                     )}
                   </div>
                 </div>
               ) : (
-                <div className="flex cursor-pointer items-center">
+                <div className="ax-pressable flex cursor-pointer items-center">
                   <div className="relative">
-                    <div className="bg-muted size-6 animate-pulse rounded-[5px]" />
+                    <div className="bg-muted size-6 animate-pulse rounded-ax-control" />
                   </div>
                 </div>
               )}
@@ -391,20 +391,20 @@ export function NavUser() {
                   <TooltipTrigger asChild>
                     <div
                       onClick={handleAccountSwitch(connection.id)}
-                      className={`flex cursor-pointer items-center ${
+                      className={`ax-pressable flex cursor-pointer items-center ${
                         connection.id === activeConnection?.id && otherConnections.length > 1
-                          ? 'outline-mainBlue rounded-[5px] outline outline-2'
+                          ? 'outline-ax-accent rounded-ax-control outline outline-2'
                           : ''
                       }`}
                     >
                       <div className="relative">
-                        <Avatar className="size-7 rounded-[5px]">
+                        <Avatar className="size-7 rounded-ax-control">
                           <AvatarImage
-                            className="rounded-[5px]"
+                            className="rounded-ax-control"
                             src={connection.picture || undefined}
                             alt={connection.name || connection.email}
                           />
-                          <AvatarFallback className="rounded-[5px] text-[10px]">
+                          <AvatarFallback className="rounded-ax-control text-[10px]">
                             {(connection.name || connection.email)
                               .split(' ')
                               .map((n) => n[0])
@@ -414,7 +414,7 @@ export function NavUser() {
                           </AvatarFallback>
                         </Avatar>
                         {connection.id === activeConnection?.id && otherConnections.length > 1 && (
-                          <CircleCheck className="fill-mainBlue absolute -bottom-2 -right-2 size-4 rounded-full bg-white dark:bg-black" />
+                          <CircleCheck className="fill-ax-accent absolute -bottom-2 -right-2 size-4 rounded-full bg-white dark:bg-black" />
                         )}
                       </div>
                     </div>
@@ -428,12 +428,12 @@ export function NavUser() {
               {otherConnections.length > 3 && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <button className="hover:bg-muted flex h-7 w-7 cursor-pointer items-center justify-center rounded-[5px]">
+                    <button className="hover:bg-muted flex h-7 w-7 cursor-pointer items-center justify-center rounded-ax-control">
                       <span className="text-[10px]">+{otherConnections.length - 3}</span>
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent
-                    className="ml-3 min-w-56 bg-white font-medium dark:bg-[#131313]"
+                    className="ml-3 min-w-56 ax-type-ui border-ax-border bg-ax-overlay text-ax-primary shadow-ax-popover"
                     align="end"
                     side={'bottom'}
                     sideOffset={8}
@@ -442,7 +442,7 @@ export function NavUser() {
                       <DropdownMenuItem
                         key={connection.id}
                         onClick={handleAccountSwitch(connection.id)}
-                        className="flex cursor-pointer items-center gap-3 py-1"
+                        className="ax-pressable flex cursor-pointer items-center gap-3 py-1"
                       >
                         <Avatar className="size-7 rounded-lg">
                           <AvatarImage
@@ -476,7 +476,7 @@ export function NavUser() {
               )}
 
               <AddConnectionDialog>
-                <Button className="hover:bg-offsetLight/80 dark:hover:bg-offsetDark/80 flex h-7 w-7 cursor-pointer items-center justify-center rounded-[5px] border border-dashed bg-transparent px-0 text-black dark:bg-[#262626] dark:text-[#929292]">
+                <Button className="hover:bg-offsetLight/80 dark:hover:bg-offsetDark/80 flex h-7 w-7 cursor-pointer items-center justify-center rounded-ax-control border border-dashed bg-transparent px-0 text-black dark:bg-[#262626] dark:text-[#929292]">
                   <Plus className="size-4" />
                 </Button>
               </AddConnectionDialog>
@@ -490,12 +490,17 @@ export function NavUser() {
               )} */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" className={cn('md:h-fit md:px-2')}>
-                    <ThreeDots className="fill-iconLight dark:fill-iconDark" />
+                  <Button
+                    variant="ghost"
+                    className={cn(
+                      'ax-pressable rounded-ax-control focus-visible:ring-2 focus-visible:ring-ax-ring md:h-fit md:px-2',
+                    )}
+                  >
+                    <ThreeDots className="fill-ax-secondary" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
-                  className="ml-3 min-w-56 bg-white font-medium dark:bg-[#131313]"
+                  className="ml-3 min-w-56 ax-type-ui border-ax-border bg-ax-overlay text-ax-primary shadow-ax-popover"
                   align="end"
                   side={'bottom'}
                   sideOffset={8}

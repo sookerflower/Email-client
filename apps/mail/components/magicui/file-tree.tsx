@@ -226,10 +226,11 @@ const Folder = ({
     <Accordion.Item {...props} value={value} className="relative h-full overflow-hidden">
       <div
         className={cn(
-          `flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm hover:bg-black/10 dark:hover:bg-[#202020]`,
+          `ax-pressable ax-type-ui flex items-center gap-1 rounded-ax-control px-2 py-1.5 text-ax-secondary hover:bg-ax-hover hover:text-ax-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ax-ring`,
           className,
           {
-            'bg-sidebar-accent rounded-md': isSelect && isSelectable,
+            'bg-ax-selected font-[var(--ax-weight-medium)] text-ax-primary hover:bg-ax-selected':
+              isSelect && isSelectable,
             'cursor-pointer': isSelectable,
             'cursor-not-allowed opacity-50': !isSelectable,
           },
@@ -266,7 +267,7 @@ const Folder = ({
         <span
           className={cn('max-w-[124px] flex-1 truncate', {
             'cursor-pointer': canExpand && isSelectable && onFolderClick,
-            'font-bold': isSelect,
+            'font-[var(--ax-weight-medium)]': isSelect,
           })}
           {...(canExpand && isSelectable && onFolderClick
             ? {
@@ -286,7 +287,9 @@ const Folder = ({
         {count > 0 && (
           <span
             className={cn(
-              'text-muted-foreground ml-auto shrink-0 rounded-full bg-transparent px-2 py-0.5 text-xs font-medium',
+              // Same visual weight as the folder-nav badges (nav-main.tsx):
+              // one counts style across the whole sidebar.
+              'ax-type-small ml-auto shrink-0 rounded-full bg-transparent tabular-nums text-ax-tertiary',
             )}
           >
             {count}

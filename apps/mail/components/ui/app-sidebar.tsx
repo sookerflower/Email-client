@@ -85,7 +85,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <Sidebar
           collapsible="icon"
           {...props}
-          className={`bg-sidebar dark:bg-sidebar flex h-screen select-none flex-col items-center ${state === 'collapsed' ? '' : ''} pb-2`}
+          className={`bg-ax-base flex h-screen select-none flex-col items-center ${state === 'collapsed' ? '' : ''} pb-2`}
         >
           <SidebarHeader
             className={`relative top-2.5 flex flex-col gap-2 ${state === 'collapsed' ? 'px-2' : 'md:px-4'}`}
@@ -154,13 +154,16 @@ function ComposeButton() {
       <DialogDescription></DialogDescription>
 
       <DialogTrigger asChild>
-        <button type="button" className="relative mb-1.5 inline-flex h-8 w-full items-center justify-center gap-1 self-stretch overflow-hidden rounded-lg border border-gray-200 bg-[#006FFE] text-black dark:border-none dark:text-white cursor-pointer hover:bg-[#0056CC] dark:hover:bg-[#0056CC] transition-colors">
+        <button
+          type="button"
+          className="ax-pressable relative mb-1.5 inline-flex h-8 w-full cursor-pointer items-center justify-center gap-1 self-stretch overflow-hidden rounded-ax-control bg-ax-accent text-ax-on-accent transition-[background-color,transform] duration-[var(--ax-dur-press)] ease-ax-out hover:bg-ax-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ax-ring focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--ax-bg-base)]"
+        >
           {state === 'collapsed' && !isMobile ? (
-            <PencilCompose className="mt-0.5 fill-white text-black" />
+            <PencilCompose className="mt-0.5 fill-current" />
           ) : (
             <div className="flex items-center justify-center gap-2.5 pl-0.5 pr-1">
-              <PencilCompose className="fill-white" />
-              <div className="justify-start text-sm leading-none text-white">
+              <PencilCompose className="fill-current" />
+              <div className="ax-type-ui justify-start font-[var(--ax-weight-medium)] leading-none">
                 {m['common.commandPalette.commands.newEmail']()}
               </div>
             </div>
@@ -168,7 +171,7 @@ function ComposeButton() {
         </button>
       </DialogTrigger>
 
-      <DialogContent className="h-screen w-screen max-w-none border-none bg-[#FAFAFA] p-0 shadow-none dark:bg-[#141414]">
+      <DialogContent className="h-screen w-screen max-w-none border-none bg-ax-base p-0 shadow-none">
         <CreateEmail closeGuardRef={composeCloseGuard} />
       </DialogContent>
     </Dialog>

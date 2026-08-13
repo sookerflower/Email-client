@@ -191,12 +191,12 @@ export function NavMain({ items }: NavMainProps) {
             <SidebarMenuItem>
               {state !== 'collapsed' ? (
                 section.title ? (
-                  <p className="text-muted-foreground mx-2 mb-2 text-[13px] dark:text-[#898989]">
+                  <p className="ax-type-micro mx-2 mb-2 uppercase text-ax-tertiary">
                     {section.title}
                   </p>
                 ) : null
               ) : (
-                <div className="bg-muted-foreground/50 mx-2 mb-4 mt-2 h-[0.5px] dark:bg-[#262626]" />
+                <div className="mx-2 mb-4 mt-2 h-px bg-ax-border" />
               )}
               <div className="z-20 space-y-1 pb-2">
                 {section.items.map((item) => (
@@ -216,8 +216,8 @@ export function NavMain({ items }: NavMainProps) {
         {!pathname.includes('/settings') && !isBottomNav && state !== 'collapsed' && (
           <Collapsible defaultOpen={true} className="group/collapsible flex-col">
             <SidebarMenuItem className="mb-4" style={{ height: 'auto' }}>
-              <div className="mx-2 mb-4 flex items-center justify-between">
-                <span className="text-muted-foreground text-[13px] dark:text-[#898989]">
+              <div className="mx-2 mb-2 flex items-center justify-between">
+                <span className="ax-type-micro uppercase text-ax-tertiary">
                   {/* IMAP reads "Labels" like Google: the app only creates
                       $zl_ keyword labels, never real IMAP folders, so a
                       "Folders" heading over this list is misleading. */}
@@ -229,9 +229,9 @@ export function NavMain({ items }: NavMainProps) {
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="mr-1 h-4 w-4 p-0 hover:bg-transparent"
+                        className="ax-pressable mr-1 h-4 w-4 rounded-[4px] p-0 text-ax-tertiary hover:bg-transparent hover:text-ax-primary focus-visible:ring-2 focus-visible:ring-ax-ring"
                       >
-                        <Plus className="text-muted-foreground h-3 w-3 dark:text-[#898989]" />
+                        <Plus className="h-3 w-3" />
                       </Button>
                     }
                     onSubmit={onSubmit}
@@ -245,9 +245,10 @@ export function NavMain({ items }: NavMainProps) {
                   {activeAccount.providerId !== 'microsoft' &&
                   userLabels &&
                   userLabels.length === 0 ? (
-                    <p className="text-muted-foreground mx-2 mt-1 text-xs dark:text-[#898989]">
-                      Labels tag and filter your mail — press + to create one.
-                    </p>
+                    <div className="ax-type-small mx-2 mt-0.5 rounded-ax-control border border-dashed border-ax-border px-2.5 py-2 text-ax-tertiary">
+                      Labels tag and filter your mail — press{' '}
+                      <span className="text-ax-secondary">+</span> to create one.
+                    </div>
                   ) : null}
                 </>
               ) : null}
@@ -293,19 +294,20 @@ function NavItem(item: NavItemProps & { href: string }) {
           asChild
           tooltip={state === 'collapsed' ? item.title : undefined}
           className={cn(
-            'hover:bg-subtleWhite flex items-center dark:hover:bg-[#202020]',
-            item.isActive && 'bg-subtleWhite text-accent-foreground dark:bg-[#202020]',
+            'ax-pressable flex items-center rounded-ax-control text-ax-secondary hover:bg-ax-hover hover:text-ax-primary focus-visible:ring-2 focus-visible:ring-ax-ring active:bg-ax-active',
+            item.isActive &&
+              'bg-ax-selected font-[var(--ax-weight-medium)] text-ax-primary hover:bg-ax-selected',
           )}
           onClick={handleClick}
         >
           <Link target={item.target} to={item.href}>
             {item.icon && <item.icon ref={iconRef} className="mr-2 shrink-0" />}
-            <p className="relative bottom-px mt-0.5 min-w-0 flex-1 truncate text-[13px]">
+            <p className="ax-type-ui relative bottom-px mt-0.5 min-w-0 flex-1 truncate">
               {item.title}
             </p>
             {stats &&
               stats.some((stat) => stat.label?.toLowerCase() === item.id?.toLowerCase()) && (
-                <Badge className="text-muted-foreground ml-auto shrink-0 rounded-full border-none bg-transparent">
+                <Badge className="ax-type-small ml-auto shrink-0 rounded-full border-none bg-transparent px-0 font-[var(--ax-weight-normal)] tabular-nums text-ax-tertiary">
                   {stats
                     .find((stat) => stat.label?.toLowerCase() === item.id?.toLowerCase())
                     ?.count?.toLocaleString() || '0'}

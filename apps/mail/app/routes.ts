@@ -21,6 +21,10 @@ export default [
     route('/hr', '(full-width)/hr.tsx'),
   ]),
 
+  // ui-redesign phase 0: token-system showcase. Standalone (no auth, no
+  // data) so the direction can be reviewed without touching the app.
+  route('/design', 'design/page.tsx'),
+
   route('/login', '(auth)/login/page.tsx'),
   route('/login/custom-smtp', '(auth)/login/custom-smtp/page.tsx'),
 

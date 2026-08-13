@@ -283,6 +283,191 @@
   }
 }
 
+/* ==========================================================================
+   AxMail design tokens — ui-redesign phase 0 (ADDITIVE).
+   The single source every redesigned surface consumes. Nothing in the live
+   app reads these until a phase migrates it; the /design showcase renders
+   them for approval. One-off values in components are a defect once a
+   surface has been migrated.
+
+   Dark is the primary theme (this is a dark app); light is a full mirror,
+   not an afterthought. Motion curves come from the emil-design-eng craft
+   standard — CSS's built-in easings are deliberately not used.
+   ========================================================================== */
+
+:root {
+  /* --- Palette · light (mirror of the dark ramp) ------------------------ */
+  --ax-bg-base: hsl(240 6% 98%);
+  --ax-bg-surface: hsl(0 0% 100%);
+  --ax-bg-raised: hsl(240 6% 96%);
+  --ax-bg-overlay: hsl(0 0% 100%);
+  --ax-hover: hsl(240 6% 10% / 0.045);
+  --ax-active: hsl(240 6% 10% / 0.08);
+  --ax-selected: hsl(222 90% 55% / 0.09);
+  --ax-text-primary: hsl(240 8% 9%);
+  --ax-text-secondary: hsl(240 5% 38%);
+  --ax-text-tertiary: hsl(240 4% 56%);
+  --ax-text-disabled: hsl(240 4% 70%);
+  --ax-border-subtle: hsl(240 6% 10% / 0.06);
+  --ax-border: hsl(240 6% 10% / 0.1);
+  --ax-border-strong: hsl(240 6% 10% / 0.18);
+  --ax-accent: hsl(222 90% 52%);
+  --ax-accent-hover: hsl(222 90% 46%);
+  --ax-accent-muted: hsl(222 90% 52% / 0.1);
+  --ax-on-accent: hsl(0 0% 100%);
+  --ax-success: hsl(151 55% 38%);
+  --ax-success-muted: hsl(151 55% 38% / 0.12);
+  --ax-warning: hsl(36 90% 42%);
+  --ax-warning-muted: hsl(36 90% 42% / 0.14);
+  --ax-danger: hsl(354 70% 47%);
+  --ax-danger-muted: hsl(354 70% 47% / 0.1);
+  --ax-ring: hsl(222 90% 52% / 0.55);
+
+  /* --- Shadows · light -------------------------------------------------- */
+  --ax-shadow-raised: 0 1px 2px hsl(240 8% 9% / 0.06), 0 0 0 1px var(--ax-border-subtle);
+  --ax-shadow-popover:
+    0 0 0 1px var(--ax-border), 0 4px 12px hsl(240 8% 9% / 0.08),
+    0 12px 32px hsl(240 8% 9% / 0.1);
+  --ax-shadow-modal:
+    0 0 0 1px var(--ax-border), 0 12px 32px hsl(240 8% 9% / 0.12),
+    0 32px 80px hsl(240 8% 9% / 0.18);
+}
+
+.dark {
+  /* --- Palette · dark (primary) ----------------------------------------- */
+  --ax-bg-base: hsl(240 5% 6%);
+  --ax-bg-surface: hsl(240 5% 8%);
+  --ax-bg-raised: hsl(240 5% 11%);
+  --ax-bg-overlay: hsl(240 5% 13%);
+  --ax-hover: hsl(240 10% 94% / 0.045);
+  --ax-active: hsl(240 10% 94% / 0.08);
+  --ax-selected: hsl(222 95% 64% / 0.13);
+  --ax-text-primary: hsl(240 12% 96%);
+  --ax-text-secondary: hsl(240 5% 66%);
+  --ax-text-tertiary: hsl(240 4% 47%);
+  --ax-text-disabled: hsl(240 4% 34%);
+  --ax-border-subtle: hsl(240 10% 92% / 0.06);
+  --ax-border: hsl(240 10% 92% / 0.1);
+  --ax-border-strong: hsl(240 10% 92% / 0.17);
+  --ax-accent: hsl(222 95% 64%);
+  --ax-accent-hover: hsl(222 95% 70%);
+  --ax-accent-muted: hsl(222 95% 64% / 0.13);
+  --ax-on-accent: hsl(240 8% 8%);
+  --ax-success: hsl(151 50% 53%);
+  --ax-success-muted: hsl(151 50% 53% / 0.13);
+  --ax-warning: hsl(36 85% 60%);
+  --ax-warning-muted: hsl(36 85% 60% / 0.13);
+  --ax-danger: hsl(354 75% 62%);
+  --ax-danger-muted: hsl(354 75% 62% / 0.12);
+  --ax-ring: hsl(222 95% 64% / 0.55);
+
+  /* --- Shadows · dark (borders carry elevation; shade is support) ------- */
+  --ax-shadow-raised: 0 1px 2px hsl(0 0% 0% / 0.3), 0 0 0 1px var(--ax-border-subtle);
+  --ax-shadow-popover:
+    0 0 0 1px var(--ax-border), 0 4px 12px hsl(0 0% 0% / 0.35),
+    0 12px 32px hsl(0 0% 0% / 0.45);
+  --ax-shadow-modal:
+    0 0 0 1px var(--ax-border), 0 16px 48px hsl(0 0% 0% / 0.5),
+    0 40px 96px hsl(0 0% 0% / 0.55);
+}
+
+:root {
+  /* --- Type scale (13px is the UI workhorse; negative tracking tightens
+         Geist at larger sizes the way Linear/Superhuman set theirs) ------- */
+  --ax-text-micro: 0.6875rem; /* 11px */
+  --ax-leading-micro: 0.875rem;
+  --ax-track-micro: 0.02em;
+  --ax-text-small: 0.75rem; /* 12px */
+  --ax-leading-small: 1rem;
+  --ax-track-small: 0em;
+  --ax-text-ui: 0.8125rem; /* 13px */
+  --ax-leading-ui: 1.25rem;
+  --ax-track-ui: -0.003em;
+  --ax-text-body: 0.875rem; /* 14px */
+  --ax-leading-body: 1.375rem;
+  --ax-track-body: -0.006em;
+  --ax-text-heading: 1rem; /* 16px */
+  --ax-leading-heading: 1.5rem;
+  --ax-track-heading: -0.011em;
+  --ax-text-title: 1.25rem; /* 20px */
+  --ax-leading-title: 1.75rem;
+  --ax-track-title: -0.015em;
+  --ax-text-display: 1.5rem; /* 24px */
+  --ax-leading-display: 2rem;
+  --ax-track-display: -0.02em;
+  --ax-weight-normal: 450; /* Geist variable: a hair over 400 reads crisper on dark */
+  --ax-weight-medium: 520;
+  --ax-weight-semibold: 600;
+
+  /* --- Spacing & density (4px grid; density as named heights) ----------- */
+  --ax-space-unit: 0.25rem;
+  --ax-row-h: 2.25rem; /* 36px — mail list row, compact */
+  --ax-row-h-relaxed: 2.75rem; /* 44px — comfortable density setting */
+  --ax-toolbar-h: 2.75rem; /* 44px */
+  --ax-input-h: 2rem; /* 32px */
+  --ax-button-h: 2rem; /* 32px */
+  --ax-sidebar-w: 15rem; /* 240px */
+
+  /* --- Radii (tight on controls, generous on surfaces) ------------------ */
+  --ax-radius-control: 0.375rem; /* 6px  — buttons, inputs, chips */
+  --ax-radius-surface: 0.625rem; /* 10px — cards, popovers, rows */
+  --ax-radius-modal: 0.75rem; /* 12px — dialogs, sheets */
+  --ax-radius-full: 9999px;
+
+  /* --- Motion (emil-design-eng curves; never CSS defaults) --------------
+         Hot-path rule: the mail list never animates on render or update;
+         keyboard-initiated actions never animate at all. ------------------ */
+  --ax-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ax-ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ax-ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --ax-dur-press: 120ms; /* :active scale feedback */
+  --ax-dur-fast: 150ms; /* hover colors, tooltips, small popovers */
+  --ax-dur-base: 200ms; /* dropdowns, popovers */
+  --ax-dur-slow: 280ms; /* modals, drawers — ceiling for UI motion */
+}
+
+@theme inline {
+  /* Utilities for the token layer: bg-ax-*, text-ax-*, border-ax-*,
+     rounded-ax-*, shadow-ax-*, ease-ax-* */
+  --color-ax-base: var(--ax-bg-base);
+  --color-ax-surface: var(--ax-bg-surface);
+  --color-ax-raised: var(--ax-bg-raised);
+  --color-ax-overlay: var(--ax-bg-overlay);
+  --color-ax-hover: var(--ax-hover);
+  --color-ax-active: var(--ax-active);
+  --color-ax-selected: var(--ax-selected);
+  --color-ax-primary: var(--ax-text-primary);
+  --color-ax-secondary: var(--ax-text-secondary);
+  --color-ax-tertiary: var(--ax-text-tertiary);
+  --color-ax-disabled: var(--ax-text-disabled);
+  --color-ax-border-subtle: var(--ax-border-subtle);
+  --color-ax-border: var(--ax-border);
+  --color-ax-border-strong: var(--ax-border-strong);
+  --color-ax-accent: var(--ax-accent);
+  --color-ax-accent-hover: var(--ax-accent-hover);
+  --color-ax-accent-muted: var(--ax-accent-muted);
+  --color-ax-on-accent: var(--ax-on-accent);
+  --color-ax-success: var(--ax-success);
+  --color-ax-success-muted: var(--ax-success-muted);
+  --color-ax-warning: var(--ax-warning);
+  --color-ax-warning-muted: var(--ax-warning-muted);
+  --color-ax-danger: var(--ax-danger);
+  --color-ax-danger-muted: var(--ax-danger-muted);
+  --color-ax-ring: var(--ax-ring);
+
+  --radius-ax-control: var(--ax-radius-control);
+  --radius-ax-surface: var(--ax-radius-surface);
+  --radius-ax-modal: var(--ax-radius-modal);
+
+  --shadow-ax-raised: var(--ax-shadow-raised);
+  --shadow-ax-popover: var(--ax-shadow-popover);
+  --shadow-ax-modal: var(--ax-shadow-modal);
+
+  --ease-ax-out: var(--ax-ease-out);
+  --ease-ax-in-out: var(--ax-ease-in-out);
+  --ease-ax-drawer: var(--ax-ease-drawer);
+}
+
 .skeleton {
   * {
     @apply pointer-events-none!;

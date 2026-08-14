@@ -197,14 +197,6 @@
     from { stroke-dashoffset: 332; opacity: 0; }
     to { opacity: 1; }
   }
-  @keyframes shine {
-    from { background-position: 200% 0; }
-    to { background-position: -200% 0; }
-  }
-  @keyframes shine-slow {
-    from { background-position: 200% 0; }
-    to { background-position: -200% 0; }
-  }
   @keyframes blink {
     0%, 100% { opacity: 1; }
     50% { opacity: 0; }
@@ -214,8 +206,6 @@
   --animate-accordion-up: accordion-up 0.2s ease-out;
   --animate-gauge_fadeIn: gauge_fadeIn 1s ease forwards;
   --animate-gauge-fill: gauge_fill 1s ease forwards;
-  --animate-shine: shine 3s linear infinite;
-  --animate-shine-slow: shine-slow 8s linear infinite;
   --animate-blink: blink 0.8s ease-in-out infinite;
 }
 
@@ -409,6 +399,7 @@
   --ax-dur-fast: 150ms; /* hover colors, tooltips, small popovers */
   --ax-dur-base: 200ms; /* dropdowns, popovers */
   --ax-dur-slow: 280ms; /* modals, drawers — ceiling for UI motion */
+  --ax-dur-exit: 180ms; /* exits run faster than entrances */
 }
 
 @theme inline {
@@ -526,6 +517,42 @@
   @starting-style {
     opacity: 0;
     transform: translateY(8px);
+  }
+}
+
+/* Non-Radix floating panel entrance (e.g. the composer's AI preview card):
+   scale 0.97 + fade on mount via @starting-style, token curve/duration. */
+@utility ax-panel-enter {
+  transition:
+    transform var(--ax-dur-base) var(--ax-ease-out),
+    opacity var(--ax-dur-base) var(--ax-ease-out);
+  @starting-style {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+/* Streamed-content chunk fade: each appended chunk (a line of AI output)
+   fades in once on mount. Replaces per-character effects — at ~50 stream
+   deltas per generation, character-level animation is main-thread cost
+   with no perceptible gain. */
+@utility ax-chunk-enter {
+  transition: opacity var(--ax-dur-fast) var(--ax-ease-out);
+  @starting-style {
+    opacity: 0;
+  }
+}
+
+/* Modal entrance per the motion plan: 0.97 → 1 at 280ms in, 180ms out,
+   strong ease-out, center origin (modals are not anchored to a trigger). */
+@utility ax-modal-motion {
+  &[data-state='open'] {
+    animation-duration: var(--ax-dur-slow);
+    animation-timing-function: var(--ax-ease-out);
+  }
+  &[data-state='closed'] {
+    animation-duration: var(--ax-dur-exit);
+    animation-timing-function: var(--ax-ease-out);
   }
 }
 

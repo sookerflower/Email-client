@@ -17,14 +17,12 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import { Check, Command, Loader, Paperclip, Plus, Type, X as XIcon } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { TextEffect } from '@/components/motion-primitives/text-effect';
 import { ScheduleSendPicker } from './schedule-send-picker';
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { useEmailAliases } from '@/hooks/use-email-aliases';
 import useComposeEditor from '@/hooks/use-compose-editor';
 import { CurvedArrow, Sparkles, X } from '../icons/icons';
 import { gitHubEmojis } from '@tiptap/extension-emoji';
-import { AnimatePresence, motion } from 'motion/react';
 import { zodResolver } from '@hookform/resolvers/zod';
 
 import { useTRPC } from '@/providers/query-provider';
@@ -789,12 +787,12 @@ export function EmailComposer({
         className,
       )}
     >
-      <div className="no-scrollbar dark:bg-panelDark flex min-h-0 flex-1 flex-col overflow-y-auto rounded-2xl">
+      <div className="no-scrollbar bg-ax-surface flex min-h-0 flex-1 flex-col overflow-y-auto rounded-2xl">
         {/* To, Cc, Bcc */}
-        <div className="shrink-0 overflow-visible border-b border-[#E7E7E7] pb-2 dark:border-[#252525]">
+        <div className="shrink-0 overflow-visible border-b border-ax-border-subtle pb-2">
           <div className="flex justify-between px-3 pt-3">
             <div className="flex w-full items-center gap-2">
-              <p className="text-sm font-medium text-[#8C8C8C]">To:</p>
+              <p className="ax-type-ui font-[var(--ax-weight-medium)] text-ax-tertiary">To:</p>
               <RecipientAutosuggest
                 control={form.control}
                 name="to"
@@ -806,14 +804,14 @@ export function EmailComposer({
             <div className="flex gap-2">
               <button
                 tabIndex={-1}
-                className="flex h-full items-center gap-2 text-sm font-medium text-[#8C8C8C] hover:text-[#A8A8A8] hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors cursor-pointer rounded-sm px-1 py-0.5"
+                className="ax-pressable ax-type-ui flex h-full cursor-pointer items-center gap-2 rounded-[4px] px-1 py-0.5 font-[var(--ax-weight-medium)] text-ax-tertiary transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-hover hover:text-ax-primary"
                 onClick={() => setShowCc(!showCc)}
               >
                 <span>Cc</span>
               </button>
               <button
                 tabIndex={-1}
-                className="flex h-full items-center gap-2 text-sm font-medium text-[#8C8C8C] hover:text-[#A8A8A8] hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors cursor-pointer rounded-sm px-1 py-0.5"
+                className="ax-pressable ax-type-ui flex h-full cursor-pointer items-center gap-2 rounded-[4px] px-1 py-0.5 font-[var(--ax-weight-medium)] text-ax-tertiary transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-hover hover:text-ax-primary"
                 onClick={() => setShowBcc(!showBcc)}
               >
                 <span>Bcc</span>
@@ -821,10 +819,10 @@ export function EmailComposer({
               {onClose && (
                 <button
                   tabIndex={-1}
-                  className="flex h-full items-center gap-2 text-sm font-medium text-[#8C8C8C] hover:text-[#A8A8A8] hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors cursor-pointer rounded-sm px-1 py-0.5"
+                  className="ax-pressable ax-type-ui flex h-full cursor-pointer items-center gap-2 rounded-[4px] px-1 py-0.5 font-[var(--ax-weight-medium)] text-ax-tertiary transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-hover hover:text-ax-primary"
                   onClick={handleClose}
                 >
-                  <X className="h-3.5 w-3.5 fill-[#9A9A9A]" />
+                  <X className="h-3.5 w-3.5 fill-ax-tertiary" />
                 </button>
               )}
             </div>
@@ -834,7 +832,7 @@ export function EmailComposer({
             {/* CC Section */}
             {showCc && (
               <div className="flex items-center gap-2 px-3">
-                <p className="text-sm font-medium text-[#8C8C8C]">Cc:</p>
+                <p className="ax-type-ui font-[var(--ax-weight-medium)] text-ax-tertiary">Cc:</p>
                 <RecipientAutosuggest
                   control={form.control}
                   name="cc"
@@ -847,7 +845,7 @@ export function EmailComposer({
             {/* BCC Section */}
             {showBcc && (
               <div className="flex items-center gap-2 px-3">
-                <p className="text-sm font-medium text-[#8C8C8C]">Bcc:</p>
+                <p className="ax-type-ui font-[var(--ax-weight-medium)] text-ax-tertiary">Bcc:</p>
                 <RecipientAutosuggest
                   control={form.control}
                   name="bcc"
@@ -862,9 +860,9 @@ export function EmailComposer({
         {/* Subject */}
         {!activeReplyId ? (
           <div className="flex items-center gap-2 border-b p-3">
-            <p className="text-sm font-medium text-[#8C8C8C]">Subject:</p>
+            <p className="ax-type-ui font-[var(--ax-weight-medium)] text-ax-tertiary">Subject:</p>
             <input
-              className="h-4 w-full bg-transparent text-sm font-normal leading-normal text-black placeholder:text-[#797979] focus:outline-none dark:text-white/90"
+              className="ax-type-ui h-4 w-full bg-transparent text-ax-primary placeholder:text-ax-tertiary focus:outline-none"
               placeholder="Re: Design review feedback"
               value={subjectInput}
               onChange={(e) => {
@@ -876,14 +874,14 @@ export function EmailComposer({
             <button
               onClick={handleGenerateSubject}
               disabled={isLoading || isGeneratingSubject || messageLength < 1}
-              className="hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors cursor-pointer rounded p-1"
+              className="ax-pressable cursor-pointer rounded-[4px] p-1 transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-hover"
             >
               <div className="flex items-center justify-center gap-2.5 pl-0.5">
                 <div className="flex h-5 items-center justify-center gap-1 rounded-sm">
                   {isGeneratingSubject ? (
-                    <Loader className="h-3.5 w-3.5 animate-spin fill-black dark:fill-white" />
+                    <Loader className="h-3.5 w-3.5 animate-spin fill-ax-secondary" />
                   ) : (
-                    <Sparkles className="h-3.5 w-3.5 fill-black dark:fill-white" />
+                    <Sparkles className="h-3.5 w-3.5 fill-ax-accent" />
                   )}
                 </div>
               </div>
@@ -894,7 +892,7 @@ export function EmailComposer({
         {/* From */}
         {aliases && aliases.length > 1 ? (
           <div className="flex items-center gap-2 border-b p-3">
-            <p className="text-sm font-medium text-[#8C8C8C]">From:</p>
+            <p className="ax-type-ui font-[var(--ax-weight-medium)] text-ax-tertiary">From:</p>
             <Select
               value={fromEmail || ''}
               onValueChange={(value) => {
@@ -902,7 +900,7 @@ export function EmailComposer({
                 markUnsaved();
               }}
             >
-              <SelectTrigger className="h-6 flex-1 border-0 bg-transparent p-0 text-sm font-normal text-black placeholder:text-[#797979] focus:outline-none focus:ring-0 dark:text-white/90">
+              <SelectTrigger className="ax-type-ui h-6 flex-1 border-0 bg-transparent p-0 text-ax-primary placeholder:text-ax-tertiary focus:outline-none focus:ring-0">
                 <SelectValue placeholder="Select an email address" />
               </SelectTrigger>
               <SelectContent className="z-99999">
@@ -912,7 +910,7 @@ export function EmailComposer({
                       <span className="text-sm">
                         {alias.name ? `${alias.name} <${alias.email}>` : alias.email}
                       </span>
-                      {alias.primary && <span className="text-xs text-[#8C8C8C]">Primary</span>}
+                      {alias.primary && <span className="ax-type-small text-ax-tertiary">Primary</span>}
                     </div>
                   </SelectItem>
                 ))}
@@ -922,7 +920,7 @@ export function EmailComposer({
         ) : null}
 
         {/* Message Content */}
-        <div className="flex-1 overflow-y-auto border-t bg-[#FFFFFF] px-3 py-3 outline-white/5 dark:bg-[#202020]">
+        <div className="flex-1 overflow-y-auto border-t border-ax-border-subtle bg-ax-surface px-3 py-3">
           <div
             onClick={() => {
               editor.commands.focus();
@@ -939,19 +937,19 @@ export function EmailComposer({
       </div>
 
       {/* Bottom Actions */}
-      <div className="inline-flex w-full shrink-0 items-end justify-between self-stretch rounded-b-2xl bg-[#FFFFFF] px-3 py-3 outline-white/5 dark:bg-[#202020]">
+      <div className="inline-flex w-full shrink-0 items-end justify-between self-stretch rounded-b-2xl bg-ax-surface px-3 py-3">
         <div className="flex flex-col items-start justify-start gap-2">
           {toggleToolbar && <Toolbar editor={editor} />}
           <div className="flex items-center justify-start gap-2">
-            <Button size={'xs'} onClick={handleSend} disabled={isLoading || settingsLoading || !isScheduleValid}>
+            <Button size={'xs'} onClick={handleSend} disabled={isLoading || settingsLoading || !isScheduleValid} className="ax-pressable rounded-ax-control bg-ax-accent text-ax-on-accent hover:bg-ax-accent-hover focus-visible:ring-2 focus-visible:ring-ax-ring">
               <div className="flex items-center justify-center">
-                <div className="text-center text-sm leading-none text-white dark:text-black">
+                <div className="ax-type-ui text-center font-[var(--ax-weight-medium)] leading-none">
                   <span>Send </span>
                 </div>
               </div>
-              <div className="flex h-5 items-center justify-center gap-1 rounded-sm bg-white/10 px-1 dark:bg-black/10">
-                <Command className="h-3.5 w-3.5 text-white dark:text-black" />
-                <CurvedArrow className="mt-1.5 h-4 w-4 fill-white dark:fill-black" />
+              <div className="flex h-5 items-center justify-center gap-1 rounded-sm bg-[var(--ax-on-accent)]/10 px-1">
+                <Command className="h-3.5 w-3.5 text-current" />
+                <CurvedArrow className="mt-1.5 h-4 w-4 fill-current" />
               </div>
             </Button>
             <ScheduleSendPicker
@@ -967,17 +965,17 @@ export function EmailComposer({
               size={'xs'}
               onClick={() => void saveDraft({ manual: true })}
               disabled={isSavingDraft || !hasAnyComposeContent}
-              className="bg-background border hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors cursor-pointer"
+              className="ax-pressable rounded-ax-control border border-ax-border bg-ax-raised text-ax-primary transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-overlay focus-visible:ring-2 focus-visible:ring-ax-ring cursor-pointer"
             >
-              <span className="px-0.5 text-sm">{isSavingDraft ? 'Saving…' : 'Save draft'}</span>
+              <span className="ax-type-ui px-0.5">{isSavingDraft ? 'Saving…' : 'Save draft'}</span>
             </Button>
             {showSavedFlash ? (
-              <span aria-live="polite" className="text-muted-foreground text-sm">
+              <span aria-live="polite" className="ax-type-ui text-ax-success">
                 Saved
               </span>
             ) : null}
-            <Button variant={'secondary'} size={'xs'} onClick={() => fileInputRef.current?.click()} className="bg-background border hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors cursor-pointer">
-              <Plus className="h-3 w-3 fill-[#9A9A9A]" />
+            <Button variant={'secondary'} size={'xs'} onClick={() => fileInputRef.current?.click()} className="ax-pressable rounded-ax-control border border-ax-border bg-ax-raised text-ax-primary transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-overlay focus-visible:ring-2 focus-visible:ring-ax-ring cursor-pointer">
+              <Plus className="h-3 w-3 fill-ax-tertiary" />
               <span className="hidden px-0.5 text-sm md:block">Add</span>
             </Button>
             <TemplateButton
@@ -1008,29 +1006,29 @@ export function EmailComposer({
               <Popover modal={true}>
                 <PopoverTrigger asChild>
                   <button
-                    className="focus-visible:ring-ring flex items-center gap-1.5 rounded-md border border-[#E7E7E7] bg-white/5 px-2 py-1 text-sm hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 dark:border-[#2B2B2B] cursor-pointer"
+                    className="ax-pressable ax-type-ui flex cursor-pointer items-center gap-1.5 rounded-ax-control border border-ax-border bg-ax-raised px-2 py-1 text-ax-primary transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ax-ring"
                     aria-label={`View ${attachments.length} attached ${pluralize('file', attachments.length)}`}
                   >
-                    <Paperclip className="h-3.5 w-3.5 text-[#9A9A9A]" />
+                    <Paperclip className="h-3.5 w-3.5 text-ax-tertiary" />
                     <span className="font-medium">{attachments.length}</span>
                   </button>
                 </PopoverTrigger>
                 <PopoverContent
-                  className="z-100 w-[340px] rounded-lg p-0 shadow-lg dark:bg-[#202020]"
+                  className="z-100 w-[340px] rounded-ax-surface border-ax-border bg-ax-overlay p-0 shadow-ax-popover"
                   align="start"
                   sideOffset={6}
                 >
                   <div className="flex flex-col">
-                    <div className="border-b border-[#E7E7E7] p-3 dark:border-[#2B2B2B]">
-                      <h4 className="text-sm font-semibold text-black dark:text-white/90">
+                    <div className="border-b border-ax-border-subtle p-3">
+                      <h4 className="ax-type-ui font-[var(--ax-weight-semibold)] text-ax-primary">
                         Attachments
                       </h4>
-                      <p className="text-muted-foreground text-xs dark:text-[#9B9B9B]">
+                      <p className="ax-type-small text-ax-tertiary">
                         {pluralize('file', attachments.length, true)}
                       </p>
                     </div>
 
-                    <div className="border-b border-[#E7E7E7] p-3 dark:border-[#2B2B2B]">
+                    <div className="border-b border-ax-border-subtle p-3">
                       <ImageCompressionSettings
                         quality={imageQuality}
                         onQualityChange={handleQualityChange}
@@ -1051,10 +1049,10 @@ export function EmailComposer({
                         return (
                           <div
                             key={file.name + index}
-                            className="group flex items-center justify-between gap-3 rounded-md px-1.5 py-1.5 hover:bg-black/5 dark:hover:bg-white/10"
+                            className="group flex items-center justify-between gap-3 rounded-ax-control px-1.5 py-1.5 hover:bg-ax-hover"
                           >
                             <div className="flex min-w-0 flex-1 items-center gap-3">
-                              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-[#F0F0F0] dark:bg-[#2C2C2C]">
+                              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-ax-raised">
                                 {file.type.startsWith('image/') ? (
                                   <img
                                     src={URL.createObjectURL(file)}
@@ -1078,17 +1076,17 @@ export function EmailComposer({
                               </div>
                               <div className="flex min-w-0 flex-1 flex-col">
                                 <p
-                                  className="flex items-baseline text-sm text-black dark:text-white/90"
+                                  className="ax-type-ui flex items-baseline text-ax-primary"
                                   title={file.name}
                                 >
                                   <span className="truncate">{truncatedName}</span>
                                   {extension && (
-                                    <span className="ml-0.5 shrink-0 text-[10px] text-[#8C8C8C] dark:text-[#9A9A9A]">
+                                    <span className="ax-type-micro ml-0.5 shrink-0 text-ax-tertiary">
                                       .{extension}
                                     </span>
                                   )}
                                 </p>
-                                <p className="text-muted-foreground text-xs dark:text-[#9B9B9B]">
+                                <p className="ax-type-small text-ax-tertiary">
                                   {formatFileSize(file.size)}
                                 </p>
                               </div>
@@ -1106,10 +1104,10 @@ export function EmailComposer({
                                   toast.error('Failed to remove attachment');
                                 }
                               }}
-                              className="focus-visible:ring-ring ml-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-transparent hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 cursor-pointer"
+                              className="ax-pressable ml-1 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-full bg-transparent hover:bg-ax-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ax-ring"
                               aria-label={`Remove ${file.name}`}
                             >
-                              <XIcon className="text-muted-foreground h-3.5 w-3.5 hover:text-black dark:text-[#9B9B9B] dark:hover:text-white" />
+                              <XIcon className="h-3.5 w-3.5 text-ax-tertiary hover:text-ax-primary" />
                             </button>
                           </div>
                         );
@@ -1128,7 +1126,7 @@ export function EmailComposer({
                     variant="ghost"
                     size="icon"
                     onClick={() => setToggleToolbar(!toggleToolbar)}
-                    className={`h-auto w-auto rounded p-1.5 ${toggleToolbar ? 'bg-muted' : 'bg-background'} border hover:bg-gray-50 dark:hover:bg-[#404040] transition-colors cursor-pointer`}
+                    className={`ax-pressable h-auto w-auto rounded-ax-control p-1.5 ${toggleToolbar ? 'bg-ax-active' : 'bg-ax-raised'} cursor-pointer border border-ax-border transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-overlay`}
                   >
                     <Type className="h-4 w-4" />
                   </Button>
@@ -1140,8 +1138,7 @@ export function EmailComposer({
         </div>
         <div className="flex items-start justify-start gap-2">
           <div className="relative">
-            <AnimatePresence>
-              {aiGeneratedMessage !== null ? (
+            {aiGeneratedMessage !== null ? (
                 <ContentPreview
                   content={aiGeneratedMessage}
                   onAccept={() => {
@@ -1167,12 +1164,11 @@ export function EmailComposer({
                     setAiGeneratedMessage(null);
                   }}
                 />
-              ) : null}
-            </AnimatePresence>
+            ) : null}
             <Button
               size={'xs'}
               variant={'ghost'}
-              className="border border-[#8B5CF6] cursor-pointer"
+              className="ax-pressable cursor-pointer rounded-ax-control border border-ax-border bg-ax-raised text-ax-primary hover:bg-ax-overlay focus-visible:ring-2 focus-visible:ring-ax-ring"
               onClick={async () => {
                 if (!subjectInput.trim()) {
                   await handleGenerateSubject();
@@ -1185,9 +1181,9 @@ export function EmailComposer({
               <div className="flex items-center justify-center gap-2.5 pl-0.5">
                 <div className="flex h-5 items-center justify-center gap-1 rounded-sm">
                   {aiIsLoading ? (
-                    <Loader className="h-3.5 w-3.5 animate-spin fill-black dark:fill-white" />
+                    <Loader className="h-3.5 w-3.5 animate-spin fill-ax-secondary" />
                   ) : (
-                    <Sparkles className="h-3.5 w-3.5 fill-black dark:fill-white" />
+                    <Sparkles className="h-3.5 w-3.5 fill-ax-accent" />
                   )}
                 </div>
                 <div className="hidden text-center text-sm leading-none text-black md:block dark:text-white">
@@ -1216,17 +1212,17 @@ export function EmailComposer({
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="mt-2">
-            <Button variant="outline" onClick={cancelLeave} className="cursor-pointer">
+            <Button variant="outline" onClick={cancelLeave} className="ax-pressable cursor-pointer">
               Cancel
             </Button>
             <Button
               variant="destructive"
               onClick={discardAndLeave}
-              className="cursor-pointer"
+              className="ax-pressable cursor-pointer"
             >
               Discard
             </Button>
-            <Button onClick={() => void saveAndLeave()} disabled={isSavingDraft} className="cursor-pointer">
+            <Button onClick={() => void saveAndLeave()} disabled={isSavingDraft} className="ax-pressable cursor-pointer">
               {isSavingDraft ? 'Saving…' : 'Save draft'}
             </Button>
           </DialogFooter>
@@ -1268,47 +1264,6 @@ export function EmailComposer({
   );
 }
 
-const animations = {
-  container: {
-    initial: { width: 32, opacity: 0 },
-    animate: (width: number) => ({
-      width: width < 640 ? '200px' : '400px',
-      opacity: 1,
-      transition: {
-        width: { type: 'spring', stiffness: 250, damping: 35 },
-        opacity: { duration: 0.4 },
-      },
-    }),
-    exit: {
-      width: 32,
-      opacity: 0,
-      transition: {
-        width: { type: 'spring', stiffness: 250, damping: 35 },
-        opacity: { duration: 0.4 },
-      },
-    },
-  },
-  content: {
-    initial: { opacity: 0 },
-    animate: { opacity: 1, transition: { delay: 0.15, duration: 0.4 } },
-    exit: { opacity: 0, transition: { duration: 0.3 } },
-  },
-  input: {
-    initial: { y: 10, opacity: 0 },
-    animate: { y: 0, opacity: 1, transition: { delay: 0.3, duration: 0.4 } },
-    exit: { y: 10, opacity: 0, transition: { duration: 0.3 } },
-  },
-  button: {
-    initial: { opacity: 0, scale: 0.8 },
-    animate: { opacity: 1, scale: 1, transition: { delay: 0.4, duration: 0.3 } },
-    exit: { opacity: 0, scale: 0.8, transition: { duration: 0.2 } },
-  },
-  card: {
-    initial: { opacity: 0, y: 10, scale: 0.95 },
-    animate: { opacity: 1, y: -10, scale: 1, transition: { duration: 0.3 } },
-    exit: { opacity: 0, y: 10, scale: 0.95, transition: { duration: 0.2 } },
-  },
-};
 
 const ContentPreview = ({
   content,
@@ -1319,61 +1274,49 @@ const ContentPreview = ({
   onAccept?: (value: string) => void | Promise<void>;
   onReject?: () => void | Promise<void>;
 }) => (
-  <motion.div
-    variants={animations.card}
-    initial="initial"
-    animate="animate"
-    exit="exit"
-    className="dark:bg-subtleBlack absolute bottom-full right-0 z-30 z-50 w-[400px] overflow-hidden rounded-xl border bg-white p-1 shadow-md"
-  >
+  /* Streamed AI text renders as CHUNK-level fades (each new line fades in at
+     150ms), replacing the per-character blur TextEffect — the model streams
+     in ~51 deltas, so per-character work was main-thread cost with no
+     perceptible gain at that chunk rate. The card itself enters on the
+     token panel entrance. */
+  <div className="ax-panel-enter absolute bottom-full right-0 z-50 w-[400px] overflow-hidden rounded-ax-surface border border-ax-border bg-ax-overlay p-1 shadow-ax-popover">
     <div
-      className="max-h-60 min-h-[150px] overflow-auto rounded-md p-1 text-sm"
+      className="ax-type-ui max-h-60 min-h-[150px] overflow-auto rounded-md p-1 text-ax-primary"
       style={{
         scrollbarGutter: 'stable',
       }}
     >
       {content.split('\n').map((line, i) => {
         return (
-          <TextEffect
-            per="char"
-            preset="blur"
-            as="div"
-            className="whitespace-pre-wrap"
-            speedReveal={3}
-            key={i}
-          >
+          <div className="ax-chunk-enter whitespace-pre-wrap" key={i}>
             {line}
-          </TextEffect>
+          </div>
         );
       })}
     </div>
     <div className="flex justify-end gap-2 p-2">
       <button
-        className="flex h-7 items-center gap-0.5 overflow-hidden rounded-md border bg-red-700 px-1.5 text-sm shadow-sm hover:bg-red-800 dark:border-none cursor-pointer transition-colors"
+        className="ax-pressable ax-type-ui flex h-7 cursor-pointer items-center gap-1 overflow-hidden rounded-ax-control bg-ax-danger-muted px-2 text-ax-danger transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-danger/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ax-ring"
         onClick={async () => {
           if (onReject) {
             await onReject();
           }
         }}
       >
-        <div className="flex h-5 items-center justify-center gap-1 rounded-sm">
-          <XIcon className="h-3.5 w-3.5" />
-        </div>
+        <XIcon className="h-3.5 w-3.5" />
         <span>Reject</span>
       </button>
       <button
-        className="flex h-7 items-center gap-0.5 overflow-hidden rounded-md border bg-green-700 px-1.5 text-sm shadow-sm hover:bg-green-800 dark:border-none cursor-pointer transition-colors"
+        className="ax-pressable ax-type-ui flex h-7 cursor-pointer items-center gap-1 overflow-hidden rounded-ax-control bg-ax-success-muted px-2 text-ax-success transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-success/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ax-ring"
         onClick={async () => {
           if (onAccept) {
             await onAccept(content);
           }
         }}
       >
-        <div className="flex h-5 items-center justify-center gap-1 rounded-sm">
-          <Check className="h-3.5 w-3.5" />
-        </div>
+        <Check className="h-3.5 w-3.5" />
         <span>Accept</span>
       </button>
     </div>
-  </motion.div>
+  </div>
 );

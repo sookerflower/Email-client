@@ -126,10 +126,7 @@ const StreamingText = ({ text }: { text: string }) => {
   return (
     <div className="flex items-center gap-2">
       <div
-        className={cn(
-          'bg-linear-to-r bg-size-[200%_100%] from-neutral-500 via-neutral-300 to-neutral-500 bg-clip-text text-sm leading-relaxed text-transparent',
-          isComplete ? 'animate-shine-slow' : '',
-        )}
+        className={cn('ax-type-ui leading-relaxed text-ax-secondary')}
       >
         {isThinking ? (
           <TextShimmer duration={1}>Thinking...</TextShimmer>

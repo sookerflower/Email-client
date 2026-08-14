@@ -17,7 +17,7 @@ export default function LoginPage() {
   const { allProviders, isProd } = useLoaderData<typeof clientLoader>();
 
   return (
-    <div className="flex min-h-screen w-full flex-col bg-white dark:bg-black">
+    <div className="bg-ax-base flex min-h-screen w-full flex-col">
       <LoginClient providers={allProviders} isProd={isProd} />
     </div>
   );

@@ -11,7 +11,7 @@ const Tooltip = TooltipPrimitive.Root;
 const TooltipTrigger = TooltipPrimitive.Trigger;
 
 const tooltipVariants = cva(
-  'z-50 overflow-visible rounded-lg text-sm shadow-md animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2',
+  'ax-type-small z-50 overflow-visible rounded-ax-control shadow-ax-popover animate-in fade-in-0 zoom-in-[0.97] ax-menu-motion data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95',
   {
     variants: {
       variant: {
@@ -29,7 +29,7 @@ const tooltipVariants = cva(
           'bg-purple-100/90 text-purple-900 dark:bg-purple-900/20 dark:text-purple-300 border-purple-900 [border-width:0.5px]',
         forums:
           'bg-blue-100/90 text-blue-900 dark:bg-blue-900/20 dark:text-blue-300 border-blue-900 [border-width:0.5px]',
-        sidebar: 'backdrop-blur-xl bg-white/80 dark:bg-[#413F3E] p-2.5 flex flex-col gap-2',
+        sidebar: 'backdrop-blur-xl bg-ax-overlay/90 border border-ax-border p-2.5 flex flex-col gap-2',
       },
     },
     defaultVariants: {
@@ -61,7 +61,7 @@ const TooltipContent = React.forwardRef<
         xmlns="http://www.w3.org/2000/svg"
         className="absolute left-[-6px] top-1/2 -translate-y-1/2"
       >
-        <path d="M6 0L0 5L6 10V0Z" className="fill-white/80 dark:fill-[#413F3E]" />
+        <path d="M6 0L0 5L6 10V0Z" className="fill-[var(--ax-bg-overlay)]" />
       </svg>
     )}
     {props.children}

@@ -65,10 +65,10 @@ export default function CustomSmtpLoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen w-full flex-col items-center justify-center bg-white dark:bg-[#111111]">
+    <div className="bg-ax-base flex min-h-screen w-full flex-col items-center justify-center">
       <div className="w-full max-w-[400px] space-y-6 px-4">
         <div className="space-y-1 text-center">
-          <p className="text-3xl font-bold text-black dark:text-white">Custom IMAP/SMTP</p>
+          <p className="ax-type-title text-3xl text-ax-primary">Custom IMAP/SMTP</p>
           <p className="text-muted-foreground text-sm">
             Sign in with your mail account. First sign-in connects the mailbox automatically.
           </p>
@@ -103,14 +103,14 @@ export default function CustomSmtpLoginPage() {
 
           <button
             type="button"
-            className="text-muted-foreground text-xs underline"
+            className="ax-type-small text-ax-tertiary underline underline-offset-2 hover:text-ax-primary"
             onClick={() => setShowAdvanced((v) => !v)}
           >
             {showAdvanced ? 'Hide server settings' : 'Server settings (optional)'}
           </button>
 
           {showAdvanced && (
-            <div className="space-y-3 rounded-md border border-black/10 p-3 dark:border-white/10">
+            <div className="space-y-3 rounded-ax-control border border-ax-border p-3">
               <div className="grid grid-cols-[1fr_90px] gap-2">
                 <div className="space-y-1">
                   <Label htmlFor="cs-imapHost" className="text-xs">
@@ -174,7 +174,7 @@ export default function CustomSmtpLoginPage() {
             </div>
           )}
 
-          <Button type="submit" className="w-full" disabled={isPending}>
+          <Button type="submit" className="ax-pressable w-full rounded-ax-control bg-ax-accent text-ax-on-accent hover:bg-ax-accent-hover focus-visible:ring-2 focus-visible:ring-ax-ring" disabled={isPending}>
             {isPending ? 'Verifying credentials…' : 'Sign in'}
           </Button>
         </form>

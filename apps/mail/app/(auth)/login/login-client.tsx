@@ -133,11 +133,11 @@ function LoginClientContent({ providers, isProd }: LoginClientProps) {
   });
 
   return (
-    <div className="flex min-h-screen w-full flex-col items-center justify-between bg-[#111111]">
+    <div className="bg-ax-base flex min-h-screen w-full flex-col items-center justify-between">
       <div className="animate-in slide-in-from-bottom-4 mx-auto flex max-w-[600px] grow items-center justify-center space-y-8 px-4 duration-500 sm:px-12 md:px-0">
         <div className="w-full space-y-4 flex flex-col items-center">
           <img src="/app-logo.png" alt="AxMail Logo" className="h-16 w-16 rounded-2xl object-contain shadow-lg" />
-          <p className="text-center text-4xl font-bold text-white md:text-5xl">Login to AxMail</p>
+          <p className="ax-type-display text-center text-4xl text-ax-primary md:text-5xl">Login to AxMail</p>
 
           {error && (
             <Alert variant="default" className="border-orange-500/40 bg-orange-500/10">
@@ -147,7 +147,7 @@ function LoginClientContent({ providers, isProd }: LoginClientProps) {
           )}
 
           {shouldShowDetailedConfig && (
-            <div className="rounded-lg border border-black/10 bg-black/5 p-5 dark:border-white/10 dark:bg-white/5">
+            <div className="rounded-ax-surface border border-ax-border bg-ax-raised p-5">
               <div className="flex flex-col space-y-4">
                 <div className="flex items-center">
                   <TriangleAlert size={28} />
@@ -254,7 +254,7 @@ function LoginClientContent({ providers, isProd }: LoginClientProps) {
           )}
 
           {shouldShowSimplifiedMessage && (
-            <div className="rounded-lg border border-black/10 bg-black/5 p-4 dark:border-white/10 dark:bg-white/5">
+            <div className="rounded-ax-surface border border-ax-border bg-ax-raised p-4">
               <div className="flex items-center">
                 <TriangleAlert size={28} />
                 <p className="ml-2 text-sm text-black/80 dark:text-white/80">
@@ -274,7 +274,7 @@ function LoginClientContent({ providers, isProd }: LoginClientProps) {
                     <Button
                       key={provider.id}
                       onClick={() => handleProviderClick(provider)}
-                      className="border-input bg-background text-primary hover:bg-accent hover:text-accent-foreground h-12 w-full rounded-lg border-2"
+                      className="ax-pressable ax-type-body h-12 w-full rounded-ax-control border border-ax-border bg-ax-raised font-[var(--ax-weight-medium)] text-ax-primary transition-colors duration-[var(--ax-dur-fast)] hover:bg-ax-overlay focus-visible:ring-2 focus-visible:ring-ax-ring"
                     >
                       {getProviderIcon(provider.id)}
                       Continue with {provider.name}

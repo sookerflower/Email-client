@@ -783,7 +783,7 @@ export function EmailComposer({
   return (
     <div
       className={cn(
-        'flex max-h-[500px] w-full max-w-[750px] flex-col overflow-hidden rounded-2xl bg-[#FAFAFA] shadow-sm dark:bg-[#202020]',
+        'bg-ax-surface flex max-h-[500px] w-full max-w-[750px] flex-col overflow-hidden rounded-2xl shadow-ax-raised',
         className,
       )}
     >

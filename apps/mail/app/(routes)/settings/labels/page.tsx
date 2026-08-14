@@ -123,7 +123,7 @@ export default function LabelsPage() {
                             <span>{label.name}</span>
                           </Badge>
                         </div>
-                        <div className="dark:bg-panelDark absolute right-2 z-25 flex items-center gap-1 rounded-xl border bg-white p-1 opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+                        <div className="z-25 absolute right-2 flex items-center gap-1 rounded-ax-control border border-ax-border bg-ax-overlay p-1 opacity-0 shadow-ax-raised group-hover:opacity-100">
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <Button
@@ -132,10 +132,10 @@ export default function LabelsPage() {
                                 className="h-6 w-6 [&_svg]:size-3.5"
                                 onClick={() => handleEdit(label)}
                               >
-                                <Pencil className="text-[#898989]" />
+                                <Pencil className="text-ax-tertiary" />
                               </Button>
                             </TooltipTrigger>
-                            <TooltipContent className="dark:bg-panelDark mb-1 bg-white">
+                            <TooltipContent className="mb-1 bg-ax-overlay">
                               {m['common.labels.editLabel']()}
                             </TooltipContent>
                           </Tooltip>
@@ -144,13 +144,13 @@ export default function LabelsPage() {
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="h-6 w-6 hover:bg-[#FDE4E9] dark:hover:bg-[#411D23] [&_svg]:size-3.5"
+                                className="h-6 w-6 hover:bg-ax-danger-muted [&_svg]:size-3.5"
                                 onClick={() => handleDelete(label.id!)}
                               >
                                 <Bin className="fill-[#F43F5E]" />
                               </Button>
                             </TooltipTrigger>
-                            <TooltipContent className="dark:bg-panelDark mb-1 bg-white">
+                            <TooltipContent className="mb-1 bg-ax-overlay">
                               {m['common.labels.deleteLabel']()}
                             </TooltipContent>
                           </Tooltip>

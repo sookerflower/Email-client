@@ -629,7 +629,7 @@ export const Categories = () => {
             />
           ),
           colors:
-            'border-0 bg-[#006FFE] text-white dark:bg-[#006FFE] dark:text-white dark:hover:bg-[#006FFE]/90',
+            'border-0 bg-ax-accent text-ax-on-accent hover:bg-ax-accent-hover',
         };
       case 'Personal':
         return {

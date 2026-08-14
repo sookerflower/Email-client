@@ -219,9 +219,14 @@ export default function DesignShowcase() {
                     row.selected ? 'bg-ax-selected' : 'hover:bg-ax-hover'
                   }`}
                 >
+                  {/* Shipped rows lead with a 24px avatar that doubles as the
+                      bulk-select toggle; sender column is w-32 (xl:w-40). */}
+                  <span className="flex size-6 shrink-0 items-center justify-center rounded-full border border-ax-border bg-ax-raised ax-type-micro text-ax-tertiary">
+                    {row.sender[0]}
+                  </span>
                   <span className={`size-1.5 shrink-0 rounded-full ${row.unread ? 'bg-ax-accent' : 'bg-transparent'}`} />
                   <span
-                    className={`ax-type-ui w-36 shrink-0 truncate ${row.unread ? 'font-[var(--ax-weight-semibold)] text-ax-primary' : 'text-ax-secondary'}`}
+                    className={`ax-type-ui w-32 shrink-0 truncate ${row.unread ? 'font-[var(--ax-weight-semibold)] text-ax-primary' : 'text-ax-secondary'}`}
                   >
                     {row.sender}
                   </span>
@@ -262,12 +267,14 @@ export default function DesignShowcase() {
               <EasingDemo label="ease-ax-out · entrances" ease="var(--ax-ease-out)" dur="200ms" />
               <EasingDemo label="ease-ax-in-out · on-screen moves" ease="var(--ax-ease-in-out)" dur="280ms" />
               <EasingDemo label="ease-ax-drawer · sheets" ease="var(--ax-ease-drawer)" dur="280ms" />
+              <EasingDemo label="ease-ax-out · exits (faster)" ease="var(--ax-ease-out)" dur="180ms" />
             </div>
             <div className="mt-4 flex items-center gap-4">
               <PopoverDemo />
               <span className="ax-type-small text-ax-tertiary">
-                popover: scale 0.97 → 1 + fade, 200ms, origin-aware · press: scale 0.97, 120ms · hot
-                path (list, keyboard nav): no motion, ever
+                popover/menu/tooltip: scale 0.97 → 1 + fade, 200ms, origin-aware · modal: 280ms in,
+                180ms out, centered · press: scale 0.97, 120ms · streamed AI text: chunk fade 150ms ·
+                hot path (list, thread j/k, keyboard nav): no motion, ever
               </span>
             </div>
           </section>

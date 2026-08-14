@@ -61,6 +61,9 @@ export default function NotificationsPage() {
           </div>
         }
       >
+        <div className="ax-type-small mb-2 rounded-ax-control border border-dashed border-ax-border px-3 py-2 text-ax-tertiary">
+          These settings are not wired up in this deployment yet - the controls below preview the intended surface.
+        </div>
         <Form {...form}>
           <form
             id="notifications-form"

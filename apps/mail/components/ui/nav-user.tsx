@@ -476,7 +476,7 @@ export function NavUser() {
               )}
 
               <AddConnectionDialog>
-                <Button className="hover:bg-offsetLight/80 dark:hover:bg-offsetDark/80 flex h-7 w-7 cursor-pointer items-center justify-center rounded-ax-control border border-dashed bg-transparent px-0 text-black dark:bg-[#262626] dark:text-[#929292]">
+                <Button className="ax-pressable flex h-7 w-7 cursor-pointer items-center justify-center rounded-ax-control border border-dashed border-ax-border bg-transparent px-0 text-ax-tertiary hover:bg-ax-hover hover:text-ax-primary">
                   <Plus className="size-4" />
                 </Button>
               </AddConnectionDialog>
@@ -568,7 +568,7 @@ export function NavUser() {
                 {activeAccount?.name || session.user.name || 'User'}
               </p>
             </div>
-            <div className="h-5 max-w-[200px] overflow-hidden truncate text-xs font-normal leading-none text-[#898989]">
+            <div className="ax-type-small h-5 max-w-[200px] overflow-hidden truncate leading-none text-ax-tertiary">
               {activeAccount?.email || session.user.email}
             </div>
           </div>
